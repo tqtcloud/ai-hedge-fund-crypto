@@ -49,6 +49,8 @@ def load_settings(yaml_path: str = "config.yaml") -> Settings:
 # Load and use
 settings = load_settings()
 
+# print(settings.model.name)
+# print(settings.model.provider)
 # print(settings.mode)
 # print(settings.primary_interval)
 # print(settings.start_date)

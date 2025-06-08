@@ -62,7 +62,9 @@ if __name__ == "__main__":
             portfolio=portfolio,
             strategies=settings.signals.strategies,
             show_reasoning=settings.show_reasoning,
-            show_agent_graph=settings.show_agent_graph
+            show_agent_graph=settings.show_agent_graph,
+            model_name=settings.model.name,
+            model_provider=settings.model.provider,
         )
         # print(result)
         print(result.get('decisions'))

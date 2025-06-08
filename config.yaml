@@ -12,5 +12,5 @@ signals:
   strategies: ['MacdStrategy']
 # , "RSIStrategy"]
 model:
-  name: "deepseek/deepseek-r1-0528:free"
-  provider: "OpenRouter"
+  name: "gpt-4o-mini"
+  provider: "openai"

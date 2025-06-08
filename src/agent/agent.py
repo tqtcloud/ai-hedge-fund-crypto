@@ -18,7 +18,7 @@ class Agent:
             show_reasoning: bool = False,
             show_agent_graph: bool = False,
             model_name: str = "gpt-4o",
-            model_provider: str = "OpenAI"
+            model_provider: str = "openai"
     ):
         """
         Executes the trading workflow using the specified configuration.

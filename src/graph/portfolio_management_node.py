@@ -5,8 +5,7 @@ from langchain_core.messages import HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from .base_node import BaseNode, AgentState
 from graph import show_agent_reasoning
-from llm import openai_llm, json_parser
-
+from llm import get_llm, json_parser
 
 
 class PortfolioManagementNode(BaseNode):
@@ -83,7 +82,8 @@ def generate_trading_decision(
         max_shares: Dict[str, float],
         portfolio: Dict[str, float],
         model_name: str,
-        model_provider: str):
+        model_provider: str
+):
     """Attempts to get a decision from the LLM with retry logic"""
     # Create the prompt template
     prompt = ChatPromptTemplate.from_messages(
@@ -164,7 +164,9 @@ def generate_trading_decision(
         ]
     )
 
-    chain = prompt | openai_llm | json_parser
+    llm = get_llm(provider=model_provider, model=model_name)
+
+    chain = prompt | llm | json_parser
     result = chain.invoke(
         {
             "signals_by_ticker": json.dumps(signals_by_ticker, indent=2),
