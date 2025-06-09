@@ -23,6 +23,7 @@ if __name__ == "__main__":
         show_reasoning=settings.show_reasoning,
         model_name=settings.model.name,
         model_provider=settings.model.provider,
+        model_base_url=settings.model.base_url
     )
 
     print("Starting backtest...")
