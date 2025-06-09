@@ -1,5 +1,5 @@
 import os
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import json
 from langchain_core.messages import HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -54,6 +54,7 @@ class PortfolioManagementNode(BaseNode):
             portfolio=portfolio,
             model_name=state["metadata"]["model_name"],
             model_provider=state["metadata"]["model_provider"],
+            model_base_url=state["metadata"]["model_base_url"],
         )
 
         # Create the portfolio management message
@@ -82,7 +83,8 @@ def generate_trading_decision(
         max_shares: Dict[str, float],
         portfolio: Dict[str, float],
         model_name: str,
-        model_provider: str
+        model_provider: str,
+        model_base_url: Optional[str] = None
 ):
     """Attempts to get a decision from the LLM with retry logic"""
     # Create the prompt template
@@ -164,7 +166,7 @@ def generate_trading_decision(
         ]
     )
 
-    llm = get_llm(provider=model_provider, model=model_name)
+    llm = get_llm(provider=model_provider, model=model_name, base_url=model_base_url)
 
     chain = prompt | llm | json_parser
     result = chain.invoke(

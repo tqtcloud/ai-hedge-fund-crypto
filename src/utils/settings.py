@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings
 from pydantic import model_validator, BaseModel
 from datetime import datetime
 import yaml
-from typing import List
+from typing import List, Optional
 from dotenv import load_dotenv
 from .constants import Interval
 
@@ -18,6 +18,7 @@ class SignalSettings(BaseModel):
 class ModelSettings(BaseModel):
     name: str
     provider: str
+    base_url: Optional[str] = None
 
 
 class Settings(BaseSettings):

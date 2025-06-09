@@ -186,11 +186,13 @@ cp .env.example .env
 # Binance API keys (required for data access)
 BINANCE_API_KEY=your-binance-api-key
 BINANCE_API_SECRET=your-binance-api-secret
-
-# LLM API keys (if using AI assistants)
-OPENAI_API_KEY=your-openai-api-key
-GROQ_API_KEY=your-groq-api-key
-OPENROUTER_API_KEY=your-openrouter-api-key
+# For running LLMs hosted by openai (gpt-4o, gpt-4o-mini, etc.)
+# Get your OpenAI API key from https://platform.openai.com/
+OPENAI_API_KEY=your-open-ai-key
+GROQ_API_KEY=your-open-ai-key
+OPENROUTER_API_KEY=your-open-ai-key
+ANTHROPIC_API_KEY=your-anthropic-api-key
+GOOGLE_API_KEY=your-google-api-key
 ```
 
 ## Configuration
@@ -210,7 +212,13 @@ signals:
   intervals: ["30m", "1h", "4h"]  # Timeframes to analyze
   tickers: ["BTCUSDT", "ETHUSDT"]  # Trading pairs
   strategies: ['MacdStrategy']  # Strategies to use
+model:
+  name: "gpt-4o-mini" # config your model
+  provider: "openai"  # config your llm provider, support openai， groq， openrouter，gemini，anthropic，ollama
+#  base_url: "https://api.openai.com/v1"  # not required, but if you want to set the base_url
 ```
+**Supported providers include OpenAI, Groq, OpenRouter, Gemini, Anthropic, and Ollama.** Most LLMs are compatible with the OpenAI SDK,
+so you can often switch models by simply adjusting the model name and base_url to match the desired provider.
 
 ## Usage
 
@@ -301,7 +309,10 @@ result = Agent.run(
             portfolio=portfolio,
             strategies=settings.signals.strategies,
             show_reasoning=settings.show_reasoning,
-            show_agent_graph=settings.show_agent_graph
+            show_agent_graph=settings.show_agent_graph,
+            model_name=settings.model.name,
+            model_provider=settings.model.provider,
+            model_base_url=settings.model.base_url
         )
 print(result)
 ```

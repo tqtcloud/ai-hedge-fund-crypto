@@ -14,4 +14,5 @@ signals:
 model:
   name: "gpt-4o-mini" # choose your model.
   provider: "openai"  # llm provider.
+  base_url: "https://api.openai.com/v1"  # you can change it to your own.
 

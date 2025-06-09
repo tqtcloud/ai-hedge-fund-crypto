@@ -14,3 +14,4 @@ signals:
 model:
   name: "gpt-4o-mini"
   provider: "openai"
+#  base_url: "https://api.openai.com/v1"  #

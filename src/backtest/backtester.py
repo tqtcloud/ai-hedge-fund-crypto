@@ -2,7 +2,7 @@ import itertools
 from datetime import datetime
 import pandas as pd
 import numpy as np
-from typing import List, Dict
+from typing import List, Dict, Optional
 from colorama import Fore, Style
 from utils import Interval, QUANTITY_DECIMALS, format_backtest_row, print_backtest_results
 from agent import Agent
@@ -21,7 +21,8 @@ class Backtester:
             initial_capital: float,
             strategies: List[str],
             model_name: str = "gpt-4o",
-            model_provider: str = "OpenAI",
+            model_provider: str = "openai",
+            model_base_url: Optional[str] = None,
             initial_margin_requirement: float = 0.0,
             show_agent_graph: bool = False,
             show_reasoning: bool = False
@@ -37,6 +38,7 @@ class Backtester:
         :param strategies:
         :param model_name:
         :param model_provider:
+        :param model_base_url: model base url
         :param initial_margin_requirement:
         :param show_agent_graph:
         :param show_reasoning:
@@ -50,6 +52,7 @@ class Backtester:
         self.strategies = strategies
         self.model_name = model_name
         self.model_provider = model_provider
+        self.model_base_url = model_base_url
         self.show_agent_graph = show_agent_graph
         self.show_reasoning = show_reasoning
         self.binance_data_provider = BinanceDataProvider()
@@ -333,6 +336,7 @@ class Backtester:
                 strategies=self.strategies,
                 model_name=self.model_name,
                 model_provider=self.model_provider,
+                model_base_url=self.model_base_url,
                 show_agent_graph=self.show_agent_graph,
                 show_reasoning=self.show_reasoning,
             )

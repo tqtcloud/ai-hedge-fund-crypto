@@ -25,6 +25,7 @@ if __name__ == "__main__":
             show_reasoning=settings.show_reasoning,
             model_name=settings.model.name,
             model_provider=settings.model.provider,
+            model_base_url=settings.model.base_url,
         )
         print("Starting backtest...")
         performance_metrics = backtester.run_backtest()
@@ -65,6 +66,7 @@ if __name__ == "__main__":
             show_agent_graph=settings.show_agent_graph,
             model_name=settings.model.name,
             model_provider=settings.model.provider,
+            model_base_url=settings.model.base_url
         )
         # print(result)
         print(result.get('decisions'))

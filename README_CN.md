@@ -183,6 +183,8 @@ BINANCE_API_SECRET=your-binance-api-secret
 OPENAI_API_KEY=your-openai-api-key
 GROQ_API_KEY=your-groq-api-key
 OPENROUTER_API_KEY=your-openrouter-api-key
+ANTHROPIC_API_KEY=your-anthropic-api-key
+GOOGLE_API_KEY=your-google-api-key
 ```
 
 ## 配置
@@ -202,7 +204,16 @@ signals:
   intervals: ["30m", "1h", "4h"]  # 要分析的时间框架
   tickers: ["BTCUSDT", "ETHUSDT"]  # 交易对
   strategies: ['MacdStrategy']  # 使用的策略
+model:
+  name: "gpt-4o-mini" # 配置你的模型
+  provider: "openai"  # 配置llm 提供商, 支持 # openai， groq， openrouter，gemini，anthropic，ollama
+#  base_url: "https://api.openai.com/v1"  # 不是必须的，你可以配置base_url
 ```
+**支持的提供商包括 OpenAI、Groq、OpenRouter、Gemini、Anthropic 和 Ollama。**
+大多数大语言模型（LLM）兼容 OpenAI SDK，因此你通常只需修改模型名称和 base_url，即可切换到目标提供商的模型。
+
+
+__all__ = ["json_parser", "get_llm"]
 
 ## 使用方法
 
