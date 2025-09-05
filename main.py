@@ -1,12 +1,12 @@
 import os
 import sys
+
 sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
 from dotenv import load_dotenv
 from src.utils import settings
 from datetime import datetime
 from src.agent import Agent
 from src.backtest.backtester import Backtester
-
 
 load_dotenv()
 
@@ -55,15 +55,21 @@ if __name__ == "__main__":
             },
         }
 
-        result = Agent.run(
-            primary_interval=settings.primary_interval,
+        agent = Agent(
             intervals=settings.signals.intervals,
+            strategies=settings.signals.strategies,
+            show_agent_graph=settings.show_agent_graph,
+        )
+
+        result = agent.run(
+            primary_interval=settings.primary_interval,
+
             tickers=settings.signals.tickers,
             end_date=datetime.now(),
             portfolio=portfolio,
-            strategies=settings.signals.strategies,
+
             show_reasoning=settings.show_reasoning,
-            show_agent_graph=settings.show_agent_graph,
+
             model_name=settings.model.name,
             model_provider=settings.model.provider,
             model_base_url=settings.model.base_url

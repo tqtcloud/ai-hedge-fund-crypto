@@ -315,6 +315,11 @@ class Backtester:
             self.portfolio_values = []
 
         # print(self.portfolio_values)
+        agent = Agent(
+            intervals=self.intervals,
+            strategies=self.strategies,
+            show_agent_graph=self.show_agent_graph,
+        )
         for row in data_df.itertuples(index=True):
 
             index = row.Index
@@ -327,17 +332,14 @@ class Backtester:
             # ---------------------------------------------------------------
             # 1) Execute the agent's trades
             # ---------------------------------------------------------------
-            output = Agent.run(
+            output = agent.run(
                 primary_interval=self.primary_interval,
-                intervals=self.intervals,
                 tickers=self.tickers,
                 end_date=current_time,
                 portfolio=self.portfolio,
-                strategies=self.strategies,
                 model_name=self.model_name,
                 model_provider=self.model_provider,
                 model_base_url=self.model_base_url,
-                show_agent_graph=self.show_agent_graph,
                 show_reasoning=self.show_reasoning,
             )
 
