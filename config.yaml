@@ -2,16 +2,15 @@ mode: backtest # backtest, live
 start_date: 2025-08-30
 end_date: 2025-09-04
 primary_interval: 1h
-initial_cash: 100000
+initial_cash: 1000
 margin_requirement: 0.0
-show_reasoning: false
-show_agent_graph: true
+show_reasoning: true
+show_agent_graph: false
 signals:
-  intervals: ["30m", "1h", "4h"]
-  tickers: ["BTCUSDT", "ETHUSDT"]
-  strategies: ['MacdStrategy']
-# , "RSIStrategy"]
+  intervals: ["30m", "1h", "4h", "15m", "5m"]  # 要分析的时间框架
+  tickers: ["BTCUSDT"]
+  strategies: ['MacdStrategy', 'RSIStrategy']
 model:
-  name: "gpt-4o-mini"
-  provider: "openai"
-#  base_url: "https://api.openai.com/v1"  #
+  name: "ep-20250722234153-nsm5d" # choose your model.
+  provider: "openai"  # llm provider.
+  base_url: "https://ark.cn-beijing.volces.com/api/v3"  # you can change it to your own.
