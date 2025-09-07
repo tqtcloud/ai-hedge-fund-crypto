@@ -1,6 +1,6 @@
-mode: live # live
-start_date: 2025-08-01
-end_date: 2025-09-01
+mode: live # backtest, live
+start_date: 2025-08-30
+end_date: 2025-09-04
 primary_interval: 1h
 initial_cash: 1000
 margin_requirement: 0.0
