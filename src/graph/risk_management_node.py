@@ -58,37 +58,40 @@ class RiskManagementNode(BaseNode):
                 },
             }
 
-        # 添加杠杆分析功能
+        # 调用所有新增的风险管理功能方法
         leverage_analysis = self.analyze_leverage(state)
-        
-        # 将杠杆分析结果整合到风险分析中
-        for ticker in tickers:
-            if ticker in leverage_analysis:
-                risk_analysis[ticker].update(leverage_analysis[ticker])
-        
-        # 添加保证金管理分析功能
         margin_management_analysis = self.calculate_margin_management(state)
-        
-        # 将保证金管理结果整合到风险分析中
-        for ticker in tickers:
-            if ticker in margin_management_analysis:
-                risk_analysis[ticker].update(margin_management_analysis[ticker])
-        
-        # 添加动态风险指标计算功能
+        position_risk_analysis = self.assess_position_risk(state)
         dynamic_risk_analysis = self.calculate_dynamic_risk_metrics(state)
-        
-        # 将动态风险指标结果整合到风险分析中
-        for ticker in tickers:
-            if ticker in dynamic_risk_analysis:
-                risk_analysis[ticker].update(dynamic_risk_analysis[ticker])
-        
-        # 添加强平风险分析功能
         liquidation_risk_analysis = self.analyze_liquidation_risk(state)
         
-        # 将强平风险分析结果整合到风险分析中
+        # 将所有新增功能的结果正确整合到风险分析中
         for ticker in tickers:
+            # 添加杠杆分析结果
+            if ticker in leverage_analysis:
+                leverage_data = leverage_analysis[ticker]
+                # 从leverage_analysis方法的返回中只提取leverage_analysis字段
+                risk_analysis[ticker]["leverage_analysis"] = leverage_data.get("leverage_analysis", {})
+            
+            # 添加保证金管理结果
+            if ticker in margin_management_analysis:
+                margin_data = margin_management_analysis[ticker]
+                risk_analysis[ticker]["margin_management"] = margin_data.get("margin_management", {})
+            
+            # 添加仓位风险控制结果
+            if ticker in position_risk_analysis:
+                position_data = position_risk_analysis[ticker]
+                risk_analysis[ticker]["position_risk_control"] = position_data.get("position_risk_control", {})
+            
+            # 添加动态风险指标结果
+            if ticker in dynamic_risk_analysis:
+                dynamic_data = dynamic_risk_analysis[ticker]
+                risk_analysis[ticker]["dynamic_risk_metrics"] = dynamic_data.get("dynamic_risk_metrics", {})
+            
+            # 添加强平风险分析结果
             if ticker in liquidation_risk_analysis:
-                risk_analysis[ticker].update(liquidation_risk_analysis[ticker])
+                liquidation_data = liquidation_risk_analysis[ticker]
+                risk_analysis[ticker]["liquidation_analysis"] = liquidation_data.get("liquidation_analysis", {})
 
         message = HumanMessage(
             content=json.dumps(risk_analysis),
