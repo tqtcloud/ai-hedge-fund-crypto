@@ -1,0 +1,242 @@
+# 合约交易数据验证约束配置
+# 版本: v1.0 | 创建时间: 2025-09-09
+
+# ================================
+# 数值范围约束
+# ================================
+numerical_constraints:
+  # 杠杆相关约束
+  leverage:
+    min: 1
+    max: 125
+    warning_threshold: 50  # 超过此值给出高风险警告
+    conservative_max: 20   # 保守模式最大杠杆
+  
+  # 置信度约束
+  confidence:
+    min: 0
+    max: 100
+    reliable_threshold: 65  # 可信度门槛
+    high_confidence: 85     # 高置信度门槛
+  
+  # 价格相关约束
+  price:
+    min: 0.000001  # 最小价格精度
+    max: 1000000   # 最大合理价格（USDT）
+    precision: 8   # 价格精度位数
+  
+  # 仓位规模约束
+  position_size:
+    min_value: 10.0      # 最小名义价值（USDT）
+    max_value: 1000000.0 # 最大名义价值（USDT）
+    min_ratio: 0.001     # 最小仓位比例
+    max_ratio: 0.95      # 最大仓位比例
+  
+  # 风险收益比约束
+  risk_reward_ratio:
+    min: 0.5     # 最小风险收益比
+    good: 1.5    # 良好风险收益比
+    excellent: 3.0  # 优秀风险收益比
+  
+  # 止损止盈距离约束（百分比）
+  stop_distance:
+    min_stop_loss: 0.5      # 最小止损距离
+    max_stop_loss: 15.0     # 最大止损距离
+    min_take_profit: 0.8    # 最小止盈距离
+    max_take_profit: 50.0   # 最大止盈距离
+  
+  # ATR倍数约束
+  atr_multiplier:
+    min: 0.5   # 最小ATR倍数
+    max: 5.0   # 最大ATR倍数
+    default: 2.0  # 默认ATR倍数
+
+# ================================
+# 逻辑一致性约束
+# ================================
+logical_constraints:
+  # 交易方向与止损关系
+  direction_stop_logic:
+    long:
+      stop_loss: "below_entry"    # 多头止损必须低于入场价
+      take_profit: "above_entry"  # 多头止盈必须高于入场价
+    short:
+      stop_loss: "above_entry"    # 空头止损必须高于入场价
+      take_profit: "below_entry"  # 空头止盈必须低于入场价
+  
+  # 杠杆与波动率关系
+  leverage_volatility:
+    high_volatility_max_leverage: 10  # 高波动率时最大杠杆
+    volatility_threshold: 0.05        # 高波动率阈值（5%）
+  
+  # 仓位规模与账户平衡
+  position_account_balance:
+    max_single_position_ratio: 0.3   # 单笔交易最大占账户比例
+    total_exposure_ratio: 0.8        # 总敞口最大占账户比例
+  
+  # 时间框架一致性
+  timeframe_consistency:
+    min_consensus_score: 0.6   # 最小时间框架共识分数
+    conflicting_signals_limit: 2  # 最大允许冲突信号数
+
+# ================================
+# 风险约束
+# ================================
+risk_constraints:
+  # 保证金使用率约束
+  margin_utilization:
+    warning_level: 0.7     # 警告水平（70%）
+    critical_level: 0.85   # 危险水平（85%）
+    emergency_level: 0.95  # 紧急水平（95%）
+  
+  # 强平距离约束
+  liquidation_distance:
+    min_safe_distance: 15.0    # 最小安全距离（%）
+    warning_distance: 10.0     # 警告距离（%）
+    critical_distance: 5.0     # 危险距离（%）
+  
+  # VaR约束
+  var_limits:
+    daily_var_ratio: 0.02      # 日VaR占账户比例上限
+    weekly_var_ratio: 0.05     # 周VaR占账户比例上限
+  
+  # 最大回撤约束
+  drawdown_limits:
+    warning_drawdown: 0.05     # 警告回撤（5%）
+    max_drawdown: 0.15         # 最大允许回撤（15%）
+  
+  # 相关性风险约束
+  correlation_limits:
+    max_correlation: 0.8       # 最大相关性
+    diversification_min_score: 0.3  # 最小分散化分数
+  
+  # 集中度风险约束
+  concentration_limits:
+    single_asset_max_weight: 0.4     # 单一资产最大权重
+    top3_assets_max_weight: 0.7      # 前3大资产最大权重
+
+# ================================
+# 成本合理性约束
+# ================================
+cost_constraints:
+  # 手续费约束
+  trading_fees:
+    max_fee_rate: 0.001        # 最大手续费率（0.1%）
+    high_fee_warning: 0.0008   # 高手续费警告（0.08%）
+  
+  # 资金费率约束
+  funding_rate:
+    high_rate_threshold: 0.01   # 高资金费率阈值（1%/8小时）
+    extreme_rate_threshold: 0.02  # 极端资金费率阈值（2%/8小时）
+  
+  # 滑点约束
+  slippage:
+    max_expected_slippage: 0.001  # 最大预期滑点（0.1%）
+    high_slippage_warning: 0.0005  # 高滑点警告（0.05%）
+  
+  # 持仓成本约束
+  holding_cost:
+    max_daily_cost_ratio: 0.005   # 最大日持仓成本比例
+    break_even_time_limit: 168    # 盈亏平衡时间限制（小时）
+  
+  # 收益率约束
+  return_expectations:
+    min_annual_return: 0.1        # 最小年化收益率期望（10%）
+    risk_free_rate: 0.03          # 无风险利率（3%）
+    min_sharpe_ratio: 1.0         # 最小夏普比率
+
+# ================================
+# 市场环境约束
+# ================================
+market_constraints:
+  # 流动性约束
+  liquidity:
+    min_volume_24h: 1000000      # 最小24小时交易量（USDT）
+    min_order_book_depth: 50000   # 最小订单簿深度（USDT）
+  
+  # 波动率约束
+  volatility:
+    max_daily_volatility: 0.15    # 最大日波动率（15%）
+    extreme_volatility: 0.25      # 极端波动率（25%）
+  
+  # 趋势强度约束
+  trend_strength:
+    min_trend_score: 0.3          # 最小趋势强度分数
+    strong_trend_score: 0.7       # 强趋势分数
+
+# ================================
+# 执行约束
+# ================================
+execution_constraints:
+  # 订单规模约束
+  order_size:
+    min_notional: 10.0           # 最小名义价值（USDT）
+    max_notional: 100000.0       # 最大名义价值（USDT）
+    max_market_impact: 0.001     # 最大市场冲击（0.1%）
+  
+  # 时间约束
+  timing:
+    max_signal_age: 300          # 最大信号年龄（秒）
+    min_holding_time: 300        # 最小持仓时间（秒）
+    max_holding_time: 604800     # 最大持仓时间（秒，7天）
+  
+  # API限制约束
+  api_limits:
+    max_requests_per_minute: 1200  # 最大每分钟请求数
+    max_orders_per_second: 10      # 最大每秒订单数
+
+# ================================
+# 安全约束
+# ================================
+safety_constraints:
+  # 账户保护
+  account_protection:
+    min_account_balance: 100.0     # 最小账户余额（USDT）
+    emergency_stop_loss: 0.2       # 紧急止损比例（20%）
+  
+  # 系统稳定性
+  system_stability:
+    max_concurrent_positions: 10    # 最大并发持仓数
+    max_daily_trades: 50           # 最大日交易次数
+  
+  # 监控阈值
+  monitoring:
+    latency_warning: 1000          # 延迟警告阈值（毫秒）
+    data_freshness_limit: 60       # 数据新鲜度限制（秒）
+
+# ================================
+# 验证级别配置
+# ================================
+validation_levels:
+  strict:
+    description: "严格模式 - 所有约束都必须满足"
+    enabled_validators: ["numerical", "logical", "risk", "cost", "market", "execution", "safety"]
+  
+  moderate:
+    description: "适中模式 - 核心约束必须满足，其他约束允许警告"
+    enabled_validators: ["numerical", "logical", "risk", "cost"]
+    warning_only: ["market", "execution"]
+  
+  lenient:
+    description: "宽松模式 - 只检查基本安全约束"
+    enabled_validators: ["numerical", "logical", "safety"]
+    warning_only: ["risk", "cost", "market", "execution"]
+
+# ================================
+# 错误处理配置
+# ================================
+error_handling:
+  # 验证失败时的默认行为
+  default_action: "reject"  # reject, warn, adjust
+  
+  # 自动修正配置
+  auto_correction:
+    enabled: true
+    max_adjustments: 3
+    preserve_intent: true
+  
+  # 告警配置
+  alerts:
+    send_notifications: true
+    log_level: "WARNING"
+    include_suggestions: true
