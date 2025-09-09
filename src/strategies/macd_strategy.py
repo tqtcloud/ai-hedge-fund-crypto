@@ -1980,16 +1980,24 @@ class MacdStrategy(BaseNode):
         }
 
         for ticker in tickers:
+            # 收集该ticker所有时间框架的信号数据（用于跨时间框架分析）
+            timeframe_signals = {}
+            
             for interval in intervals:
                 df = data.get(f"{ticker}_{interval.value}", pd.DataFrame())
+                
+                # 如果数据为空，跳过该时间框架
+                if df.empty:
+                    continue
 
+                # 计算各种策略信号
                 trend_signals = calculate_trend_signals(df)
                 mean_reversion_signals = calculate_mean_reversion_signals(df)
                 momentum_signals = calculate_momentum_signals(df)
-
                 volatility_signals = calculate_volatility_signals(df)
                 stat_arb_signals = calculate_stat_arb_signals(df)
 
+                # 组合信号
                 combined_signal = weighted_signal_combination(
                     {
                         "trend": trend_signals,
@@ -2001,78 +2009,85 @@ class MacdStrategy(BaseNode):
                     strategy_weights,
                 )
 
-                # Calculate additional analysis for futures trading
-                atr_values = self.calculate_atr_values(df)
-                price_levels = self.identify_price_levels(df)
-                volatility_analysis = self.analyze_volatility_depth(df)
-                
-                # Generate signal metadata for this ticker's interval
-                current_signal_data = {
-                    "signal": combined_signal["signal"],
-                    "confidence": round(combined_signal["confidence"] * 100),
-                    "strategy_signals": {
-                        "trend_following": {
-                            "signal": trend_signals["signal"],
-                            "confidence": round(trend_signals["confidence"] * 100),
-                            "metrics": normalize_pandas(trend_signals["metrics"]),
-                        },
-                        "mean_reversion": {
-                            "signal": mean_reversion_signals["signal"],
-                            "confidence": round(mean_reversion_signals["confidence"] * 100),
-                            "metrics": normalize_pandas(mean_reversion_signals["metrics"]),
-                        },
-                        "momentum": {
-                            "signal": momentum_signals["signal"],
-                            "confidence": round(momentum_signals["confidence"] * 100),
-                            "metrics": normalize_pandas(momentum_signals["metrics"]),
-                        },
-                        "volatility": {
-                            "signal": volatility_signals["signal"],
-                            "confidence": round(volatility_signals["confidence"] * 100),
-                            "metrics": normalize_pandas(volatility_signals["metrics"]),
-                        },
-                        "statistical_arbitrage": {
-                            "signal": stat_arb_signals["signal"],
-                            "confidence": round(stat_arb_signals["confidence"] * 100),
-                            "metrics": normalize_pandas(stat_arb_signals["metrics"]),
-                        },
+                # 构建策略信号结构（用于signal_metadata生成和跨时间框架分析）
+                strategy_signals_data = {
+                    "trend_following": {
+                        "signal": trend_signals["signal"],
+                        "confidence": round(trend_signals["confidence"] * 100),
+                        "metrics": normalize_pandas(trend_signals["metrics"]),
+                    },
+                    "mean_reversion": {
+                        "signal": mean_reversion_signals["signal"],
+                        "confidence": round(mean_reversion_signals["confidence"] * 100),
+                        "metrics": normalize_pandas(mean_reversion_signals["metrics"]),
+                    },
+                    "momentum": {
+                        "signal": momentum_signals["signal"],
+                        "confidence": round(momentum_signals["confidence"] * 100),
+                        "metrics": normalize_pandas(momentum_signals["metrics"]),
+                    },
+                    "volatility": {
+                        "signal": volatility_signals["signal"],
+                        "confidence": round(volatility_signals["confidence"] * 100),
+                        "metrics": normalize_pandas(volatility_signals["metrics"]),
+                    },
+                    "statistical_arbitrage": {
+                        "signal": stat_arb_signals["signal"],
+                        "confidence": round(stat_arb_signals["confidence"] * 100),
+                        "metrics": normalize_pandas(stat_arb_signals["metrics"]),
                     },
                 }
-                
-                signal_metadata = self.generate_signal_metadata(df, current_signal_data)
 
-                # Generate detailed analysis report for this ticker
+                # 计算新增分析功能
+                try:
+                    # ATR值计算
+                    atr_values = self.calculate_atr_values(df)
+                    
+                    # 关键价位识别
+                    price_levels = self.identify_price_levels(df)
+                    
+                    # 波动率深度分析
+                    volatility_analysis = self.analyze_volatility_depth(df)
+                    
+                    # 为signal_metadata准备完整的信号数据
+                    current_signal_data = {
+                        "signal": combined_signal["signal"],
+                        "confidence": round(combined_signal["confidence"] * 100),
+                        "strategy_signals": strategy_signals_data
+                    }
+                    
+                    # 生成信号元数据
+                    signal_metadata = self.generate_signal_metadata(df, current_signal_data)
+                    
+                except Exception as e:
+                    print(f"Error calculating additional analysis for {ticker}_{interval.value}: {e}")
+                    # 使用默认值确保系统继续运行
+                    atr_values = {'atr_14': 0.0, 'atr_28': 0.0, 'atr_percentile': 0.0}
+                    price_levels = {
+                        'support_levels': [0.0, 0.0, 0.0],
+                        'resistance_levels': [0.0, 0.0, 0.0],
+                        'pivot_point': 0.0,
+                        'breakout_threshold': 0.0
+                    }
+                    volatility_analysis = {
+                        'volatility_percentile': 50.0,
+                        'volatility_trend': 'stable',
+                        'volatility_forecast': 0.0,
+                        'regime_probability': 0.5
+                    }
+                    signal_metadata = {
+                        'signal_strength': 'moderate',
+                        'signal_decay_time': 60,
+                        'signal_reliability': 0.5,
+                        'confirmation_status': 'pending'
+                    }
+
+                # 生成该时间框架的完整分析结果
                 technical_analysis[ticker][interval.value] = {
-                    # === 现有字段保持不变 ===
+                    # === 现有字段保持不变（向后兼容性） ===
                     "signal": combined_signal["signal"],
                     "confidence": round(combined_signal["confidence"] * 100),
-                    "strategy_signals": {
-                        "trend_following": {
-                            "signal": trend_signals["signal"],
-                            "confidence": round(trend_signals["confidence"] * 100),
-                            "metrics": normalize_pandas(trend_signals["metrics"]),
-                        },
-                        "mean_reversion": {
-                            "signal": mean_reversion_signals["signal"],
-                            "confidence": round(mean_reversion_signals["confidence"] * 100),
-                            "metrics": normalize_pandas(mean_reversion_signals["metrics"]),
-                        },
-                        "momentum": {
-                            "signal": momentum_signals["signal"],
-                            "confidence": round(momentum_signals["confidence"] * 100),
-                            "metrics": normalize_pandas(momentum_signals["metrics"]),
-                        },
-                        "volatility": {
-                            "signal": volatility_signals["signal"],
-                            "confidence": round(volatility_signals["confidence"] * 100),
-                            "metrics": normalize_pandas(volatility_signals["metrics"]),
-                        },
-                        "statistical_arbitrage": {
-                            "signal": stat_arb_signals["signal"],
-                            "confidence": round(stat_arb_signals["confidence"] * 100),
-                            "metrics": normalize_pandas(stat_arb_signals["metrics"]),
-                        },
-                    },
+                    "strategy_signals": strategy_signals_data,
                     
                     # === 新增：合约交易字段 ===
                     # ATR值计算基础
@@ -2087,24 +2102,41 @@ class MacdStrategy(BaseNode):
                     # 信号时效性
                     "signal_metadata": signal_metadata,
                 }
+                
+                # 收集该时间框架的信号数据用于跨时间框架分析
+                timeframe_signals[interval.value] = {
+                    "signal": combined_signal["signal"],
+                    "confidence": round(combined_signal["confidence"] * 100),
+                    "strategy_signals": strategy_signals_data
+                }
             
-            # === 新增：跨时间框架综合分析 ===
-            # 收集该ticker所有时间框架的信号数据
-            timeframe_signals = {}
-            for interval in intervals:
-                interval_key = interval.value
-                if interval_key in technical_analysis[ticker]:
-                    timeframe_signals[interval_key] = {
-                        "signal": technical_analysis[ticker][interval_key]["signal"],
-                        "confidence": technical_analysis[ticker][interval_key]["confidence"],
-                        "strategy_signals": technical_analysis[ticker][interval_key]["strategy_signals"]
+            # === 新增：跨时间框架综合分析（ticker级别字段） ===
+            try:
+                if timeframe_signals:  # 确保有数据才进行分析
+                    cross_timeframe_result = self.cross_timeframe_analysis(timeframe_signals)
+                else:
+                    # 默认跨时间框架分析结果
+                    cross_timeframe_result = {
+                        'timeframe_consensus': 0.5,
+                        'dominant_timeframe': '1h',  # 默认中期时间框架
+                        'conflict_areas': [],
+                        'trend_alignment': 'mixed',
+                        'overall_signal_strength': 'moderate'
                     }
-            
-            # 执行跨时间框架分析
-            cross_timeframe_result = self.cross_timeframe_analysis(timeframe_signals)
-            
-            # 将跨时间框架分析结果添加到该ticker的分析结果中
-            technical_analysis[ticker]["cross_timeframe_analysis"] = cross_timeframe_result
+                
+                # 将跨时间框架分析结果添加到该ticker的顶级分析结果中
+                technical_analysis[ticker]["cross_timeframe_analysis"] = cross_timeframe_result
+                
+            except Exception as e:
+                print(f"Error in cross-timeframe analysis for {ticker}: {e}")
+                # 使用默认值确保系统继续运行
+                technical_analysis[ticker]["cross_timeframe_analysis"] = {
+                    'timeframe_consensus': 0.5,
+                    'dominant_timeframe': '1h',
+                    'conflict_areas': [],
+                    'trend_alignment': 'mixed',
+                    'overall_signal_strength': 'moderate'
+                }
 
         # Create the technical analyst message
         message = HumanMessage(
@@ -2117,9 +2149,6 @@ class MacdStrategy(BaseNode):
 
         # Add the signal to the analyst_signals list
         state["data"]["analyst_signals"]["technical_analyst_agent"] = technical_analysis
-
-        # return state
-        # # print(state)
 
         return {
             "messages": [message],

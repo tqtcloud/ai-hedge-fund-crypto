@@ -4,8 +4,8 @@ import json
 from langchain_core.messages import HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from .base_node import BaseNode, AgentState
-from graph import show_agent_reasoning
-from llm import get_llm, json_parser
+from .state import show_agent_reasoning
+from src.llm import get_llm, json_parser
 
 
 class PortfolioManagementNode(BaseNode):

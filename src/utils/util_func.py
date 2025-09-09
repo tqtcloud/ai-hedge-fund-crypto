@@ -6,7 +6,7 @@ from typing import Dict, Any
 from colorama import Fore, Style
 from tabulate import tabulate
 import orjson
-from utils import QUANTITY_DECIMALS
+from .constants import QUANTITY_DECIMALS
 
 
 def import_strategy_class(strategies_path: str):
