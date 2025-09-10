@@ -140,6 +140,66 @@ class PortfolioManagementNode(BaseNode):
             logger.warning(f"提取 {ticker} 波动率信息失败: {e}")
             return 0.03
     
+    def _extract_market_trend(self, analyst_signals: Dict[str, Any], ticker: str) -> str:
+        """
+        从分析信号中提取市场趋势信息
+        
+        Args:
+            analyst_signals: 分析师信号数据
+            ticker: 交易对
+            
+        Returns:
+            市场趋势 ("bullish"|"bearish"|"neutral")
+        """
+        try:
+            # 尝试从技术分析信号中获取主要趋势
+            tech_signals = analyst_signals.get("technical_analyst_agent", {}).get(ticker, {})
+            
+            # 收集各时间框架的信号
+            bullish_count = 0
+            bearish_count = 0
+            neutral_count = 0
+            
+            for timeframe, signals in tech_signals.items():
+                if isinstance(signals, dict):
+                    signal = signals.get("signal", "neutral").lower()
+                    confidence = signals.get("confidence", 0)
+                    
+                    # 只考虑高置信度的信号
+                    if confidence >= 60:
+                        if signal == "bullish":
+                            bullish_count += 1
+                        elif signal == "bearish":
+                            bearish_count += 1
+                        else:
+                            neutral_count += 1
+            
+            # 检查跨时间框架分析结果
+            if "cross_timeframe_analysis" in tech_signals:
+                cross_analysis = tech_signals["cross_timeframe_analysis"]
+                trend_alignment = cross_analysis.get("trend_alignment", "mixed")
+                signal_strength = cross_analysis.get("overall_signal_strength", "weak")
+                
+                # 如果有强趋势对齐，优先使用
+                if trend_alignment == "aligned" and signal_strength == "strong":
+                    dominant_timeframe = cross_analysis.get("dominant_timeframe", "1h")
+                    if dominant_timeframe in tech_signals:
+                        dominant_signal = tech_signals[dominant_timeframe].get("signal", "neutral").lower()
+                        if dominant_signal in ["bullish", "bearish"]:
+                            return dominant_signal
+            
+            # 根据信号统计决定趋势
+            if bullish_count > bearish_count and bullish_count > neutral_count:
+                return "bullish"
+            elif bearish_count > bullish_count and bearish_count > neutral_count:
+                return "bearish"
+            else:
+                return "neutral"
+                
+        except Exception as e:
+            logger.warning(f"提取 {ticker} 市场趋势失败: {e}")
+            return "neutral"
+    
     def calculate_basic_params(
         self,
         ticker: str,
@@ -183,8 +243,15 @@ class PortfolioManagementNode(BaseNode):
         while recovery_attempts <= max_recovery_attempts:
             try:
                 # 确定交易方向和操作类型
+                # 构造市场环境上下文
+                market_context = {
+                    "volatility": self._extract_volatility_from_signals(analyst_signals, ticker),
+                    "account_balance": portfolio_cash,
+                    "market_trend": self._extract_market_trend(analyst_signals, ticker)
+                }
+                
                 direction, operation = calculator.determine_direction_and_operation(
-                    ticker, technical_data, current_positions
+                    ticker, technical_data, current_positions, market_context
                 )
                 
                 # 计算杠杆倍数（带异常处理）
@@ -447,12 +514,16 @@ class PortfolioManagementNode(BaseNode):
                 atr_percentile = 0.5
             
             # 1. 计算止损价格
-            # 基于ATR的止损距离
-            atr_multiplier = 2.0 if direction == "long" else 2.0
-            if atr_percentile > 0.8:  # 高波动环境
+            # 基于ATR的止损距离，多空方向已正确处理
+            atr_multiplier = 2.0  # 基础ATR倍数
+            if atr_percentile > 0.8:  # 高波动环境，增加止损距离
                 atr_multiplier = 2.5
-            elif atr_percentile < 0.2:  # 低波动环境
+            elif atr_percentile < 0.2:  # 低波动环境，缩小止损距离
                 atr_multiplier = 1.5
+                
+            # 根据方向调整ATR倍数（空头市场通常波动更大）
+            if direction == "short":
+                atr_multiplier *= 1.1  # 空头略微增加止损距离
                 
             atr_stop_distance = atr_14 * atr_multiplier
             
@@ -4105,80 +4176,114 @@ def generate_trading_decision(
         model_base_url: Optional[str] = None
 ):
     """Attempts to get a decision from the LLM with retry logic"""
-    # Create the prompt template
+    # Create the enhanced prompt template for bidirectional trading in Chinese
     prompt = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
-                """You are a portfolio manager making final trading decisions based on multiple tickers.
+                """您是一位专业的AI投资组合经理，专门从事具有双向交易能力的量化期货交易。
   
-                Trading Rules:
-                - For long positions:
-                  * Only buy if you have available cash
-                  * Only sell if you currently hold long shares of that ticker
-                  * Sell quantity must be ≤ current long position shares
-                  * Buy quantity must be ≤ max_shares for that ticker
+                交易理念：
+                - 基于多时间框架技术分析做出数据驱动的决策
+                - 利用向上（做多）和向下（做空）的市场波动
+                - 对所有持仓保持严格的风险管理协议
+                - 考虑跨时间框架信号的一致性和强度
   
-                - For short positions:
-                  * Only short if you have available margin (position value × margin requirement)
-                  * Only cover if you currently have short shares of that ticker
-                  * Cover quantity must be ≤ current short position shares
-                  * Short quantity must respect margin requirements
+                双向交易规则：
+                
+                多头仓位（看涨情绪）：
+                - "buy"：当信号显示向上动能时开仓或加仓多头
+                - "sell"：平仓或减仓多头以锁定利润或限制损失
+                - 只有在现金充足时才能买入
+                - 只有在当前持有该标的多头股份时才能卖出
+                - 买入数量必须 ≤ 该标的的最大股数
+                - 卖出数量必须 ≤ 当前多头仓位股数
+                
+                空头仓位（看跌情绪）：  
+                - "short"：当信号显示向下动能时开仓或加仓空头
+                - "cover"：平仓或减仓空头以锁定利润或限制损失
+                - 只有在保证金充足时才能做空（仓位价值 × 保证金要求）
+                - 只有在当前持有该标的空头股份时才能回补
+                - 做空数量必须遵守保证金要求和最大股数限制
+                - 回补数量必须 ≤ 当前空头仓位股数
+                
+                中性/持仓观望：
+                - "hold"：当信号不明确、冲突或不充分时不采取行动
+                - 当跨时间框架分析显示混合或弱信号时使用
+                - 在不确定的市场条件下保护资本
   
-                - The max_shares values are pre-calculated to respect position limits
-                - Consider both long and short opportunities based on signals
-                - Maintain appropriate risk management with both long and short exposure
+                信号分析优先级：
+                1. 跨时间框架一致性（多个时间框架的信号对齐）
+                2. 信号强度和置信度水平（优先考虑高置信度信号）
+                3. 主导时间框架分析（给长期趋势更多权重）
+                4. 技术风险评估和市场环境因素
+                5. 当前仓位风险敞口和投资组合风险管理
+                
+                关键决策因素：
+                - 多时间框架信号对齐和强度
+                - 技术指标收敛/发散
+                - 市场波动率和流动性条件
+                - 风险收益比和仓位规模优化
+                - 投资组合相关性和集中度限制
   
-                Available Actions:
-                - "buy": Open or add to long position
-                - "sell": Close or reduce long position
-                - "short": Open or add to short position
-                - "cover": Close or reduce short position
-                - "hold": No action
-  
-                Inputs:
-                - signals_by_ticker: dictionary of ticker → signals
-                - max_shares: maximum shares allowed per ticker
-                - portfolio_cash: current cash in portfolio
-                - portfolio_positions: current positions (both long and short)
-                - current_prices: current prices for each ticker
-                - margin_requirement: current margin requirement for short positions (e.g., 0.5 means 50%)
-                - total_margin_used: total margin currently in use
+                风险管理：
+                - 绝不超过仓位限制或保证金要求
+                - 考虑现有投资组合风险敞口和相关性
+                - 在各仓位间保持适当的多样化
+                - 考虑杠杆对盈利潜力和风险的影响
+                - 在高波动期间采用保守的仓位规模
+                
+                输出格式要求：
+                - 基于信号分析提供清晰的中文推理
+                - 包含反映信号强度和一致性的置信度水平
+                - 指定确切的行动类型和数量
+                - 基于技术证据论证方向选择（多/空/观望）
                 """,
             ),
             (
                 "human",
-                """Based on the team's analysis, make your trading decisions for each ticker.
-  
-                Here are the signals by ticker:
+                """分析以下技术信号和市场数据以做出最优交易决策。
+
+                各标的技术信号：
                 {signals_by_ticker}
-  
-                Current Prices:
-                {current_prices}
-  
-                Maximum Shares Allowed For Purchases:
-                {max_shares}
-  
-                Portfolio Cash: {portfolio_cash}
-                Current Positions: {portfolio_positions}
-                Current Margin Requirement: {margin_requirement}
-                Total Margin Used: {total_margin_used}
-  
-                Output strictly in JSON with the following structure:
+
+                市场数据：
+                当前价格：{current_prices}
+                最大仓位规模：{max_shares}
+                
+                投资组合状态：
+                可用现金：{portfolio_cash}
+                当前仓位：{portfolio_positions}
+                保证金要求：{margin_requirement}
+                已用保证金总额：{total_margin_used}
+
+                决策分析框架：
+                对于每个标的，请分析：
+                1. 跨时间框架信号一致性和强度
+                2. 主导时间框架和趋势对齐情况
+                3. 技术风险因素和市场环境
+                4. 基于信号置信度的仓位规模
+                5. 行动类型优化（买入/卖出/做空/回补/观望）
+
+                严格按照JSON格式输出：
                 {{
                   "decisions": {{
                     "TICKER1": {{
                       "action": "buy/sell/short/cover/hold",
                       "quantity": float,
                       "confidence": float between 0 and 100,
-                      "reasoning": "string"
+                      "reasoning": "详细的中文解释，包括信号分析、时间框架一致性、趋势方向和风险考量"
                     }},
                     "TICKER2": {{
-                      ...
-                    }},
-                    ...
+                      "action": "buy/sell/short/cover/hold", 
+                      "quantity": float,
+                      "confidence": float between 0 and 100,
+                      "reasoning": "详细的中文解释，包括信号分析、时间框架一致性、趋势方向和风险考量"
+                    }}
                   }}
                 }}
+                
+                重要提示：基于提供的全面技术分析做出决策，平等考虑看多和看空场景。通过智能仓位管理做出数据驱动的选择，以最大化风险调整后收益。所有推理必须使用中文表达。
                 """,
             ),
         ]
@@ -4198,5 +4303,4 @@ def generate_trading_decision(
             "total_margin_used": f"{portfolio.get('margin_used', 0.0):.2f}",
         }
     )
-    # print("the return result :", result)
     return result

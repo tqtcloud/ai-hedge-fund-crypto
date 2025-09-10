@@ -8,7 +8,7 @@ show_reasoning: true
 show_agent_graph: false
 signals:
   intervals: ["30m", "1h", "4h", "15m", "5m"]  # 要分析的时间框架
-  tickers: ["BTCUSDT"]
+  tickers: ["BNBUSDT"]
   strategies: ['MacdStrategy', 'RSIStrategy']
 model:
   name: "ep-20250722234153-nsm5d" # choose your model.
