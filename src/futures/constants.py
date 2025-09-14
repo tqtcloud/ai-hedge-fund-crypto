@@ -150,7 +150,12 @@ class MarginRates:
 
 class RiskParameters:
     """风险控制参数常量类"""
-    
+
+    # 杠杆限制
+    MAX_LEVERAGE = 20.0                   # 系统最大杠杆限制（符合交易所要求）
+    DEFAULT_LEVERAGE = 5.0                # 默认杠杆
+    CONSERVATIVE_LEVERAGE = 3.0           # 保守杠杆
+
     # 仓位限制
     MAX_POSITION_RATIO = 0.3              # 最大单仓位占总资金比例
     MAX_CORRELATED_POSITIONS_RATIO = 0.5  # 最大相关性仓位占比

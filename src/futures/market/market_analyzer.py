@@ -59,14 +59,25 @@ try:
 except ImportError:
     # 内置简化版技术指标实现
     def calculate_rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
+        # 增强版RSI计算 - 支持多周期和更高精度
         delta = df["close"].diff()
         gain = (delta.where(delta > 0, 0)).fillna(0)
         loss = (-delta.where(delta < 0, 0)).fillna(0)
-        avg_gain = gain.rolling(window=period).mean()
-        avg_loss = loss.rolling(window=period).mean()
-        rs = avg_gain / avg_loss
+
+        # 使用Wilder平滑法（更准确的RSI计算）
+        alpha = 1.0 / period
+        avg_gain = gain.ewm(alpha=alpha, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=alpha, adjust=False).mean()
+
+        # 避免除零错误
+        rs = np.where(avg_loss != 0, avg_gain / avg_loss, 0)
         rsi = 100 - (100 / (1 + rs))
-        return rsi
+
+        # 处理边界情况
+        rsi = np.where(avg_loss == 0, 100, rsi)
+        rsi = np.where((avg_gain == 0) & (avg_loss == 0), 50, rsi)
+
+        return pd.Series(rsi, index=df.index)
     
     def calculate_bollinger_bands(df: pd.DataFrame, window: int = 20) -> tuple:
         sma = df["close"].rolling(window).mean()
@@ -79,25 +90,49 @@ except ImportError:
         return df["close"].ewm(span=window, adjust=False).mean()
     
     def calculate_adx(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
-        # 简化版ADX计算
+        # 增强版ADX计算 - 提高准确性
         df_copy = df.copy()
+
+        # 计算真实范围 (True Range)
         df_copy["high_low"] = df_copy["high"] - df_copy["low"]
         df_copy["high_close"] = abs(df_copy["high"] - df_copy["close"].shift())
         df_copy["low_close"] = abs(df_copy["low"] - df_copy["close"].shift())
         df_copy["tr"] = df_copy[["high_low", "high_close", "low_close"]].max(axis=1)
-        
+
+        # 计算方向性移动 (Directional Movement)
         df_copy["up_move"] = df_copy["high"] - df_copy["high"].shift()
         df_copy["down_move"] = df_copy["low"].shift() - df_copy["low"]
-        
-        df_copy["plus_dm"] = np.where((df_copy["up_move"] > df_copy["down_move"]) & (df_copy["up_move"] > 0), df_copy["up_move"], 0)
-        df_copy["minus_dm"] = np.where((df_copy["down_move"] > df_copy["up_move"]) & (df_copy["down_move"] > 0), df_copy["down_move"], 0)
-        
-        df_copy["+di"] = 100 * (df_copy["plus_dm"].ewm(span=period).mean() / df_copy["tr"].ewm(span=period).mean())
-        df_copy["-di"] = 100 * (df_copy["minus_dm"].ewm(span=period).mean() / df_copy["tr"].ewm(span=period).mean())
-        df_copy["dx"] = 100 * abs(df_copy["+di"] - df_copy["-di"]) / (df_copy["+di"] + df_copy["-di"])
-        df_copy["adx"] = df_copy["dx"].ewm(span=period).mean()
-        
-        return df_copy[["adx", "+di", "-di"]]
+
+        # 修正方向性移动计算
+        df_copy["plus_dm"] = np.where(
+            (df_copy["up_move"] > df_copy["down_move"]) & (df_copy["up_move"] > 0),
+            df_copy["up_move"], 0
+        )
+        df_copy["minus_dm"] = np.where(
+            (df_copy["down_move"] > df_copy["up_move"]) & (df_copy["down_move"] > 0),
+            df_copy["down_move"], 0
+        )
+
+        # 使用Wilder平滑法计算平滑的TR和DM
+        alpha = 1.0 / period
+        df_copy["tr_smooth"] = df_copy["tr"].ewm(alpha=alpha, adjust=False).mean()
+        df_copy["plus_dm_smooth"] = df_copy["plus_dm"].ewm(alpha=alpha, adjust=False).mean()
+        df_copy["minus_dm_smooth"] = df_copy["minus_dm"].ewm(alpha=alpha, adjust=False).mean()
+
+        # 计算方向性指标
+        df_copy["+di"] = 100 * (df_copy["plus_dm_smooth"] / df_copy["tr_smooth"])
+        df_copy["-di"] = 100 * (df_copy["minus_dm_smooth"] / df_copy["tr_smooth"])
+
+        # 计算DX和ADX
+        di_sum = df_copy["+di"] + df_copy["-di"]
+        di_diff = abs(df_copy["+di"] - df_copy["-di"])
+        df_copy["dx"] = np.where(di_sum != 0, 100 * (di_diff / di_sum), 0)
+        df_copy["adx"] = df_copy["dx"].ewm(alpha=alpha, adjust=False).mean()
+
+        # 清理NaN值
+        result_df = df_copy[["adx", "+di", "-di"]].fillna(0)
+
+        return result_df
     
     def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
         high_low = df["high"] - df["low"]
@@ -196,6 +231,32 @@ class VolatilityMetrics:
 
 
 @dataclass
+class VolumeAnalysis:
+    """成交量分析结果类"""
+    volume_trend: str                       # 成交量趋势（increasing/decreasing/stable）
+    volume_strength: float                  # 成交量强度（0-1）
+    volume_distribution: Dict[str, float]   # 成交量分布统计
+    volume_profile: Dict[str, Any]          # 成交量价格分布
+    abnormal_volume_detected: bool          # 是否检测到异常成交量
+    volume_breakout_signal: bool            # 成交量突破信号
+    volume_climax: bool                     # 成交量高潮
+    volume_divergence: Optional[str] = None # 量价背离（bullish/bearish/none）
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典格式"""
+        return {
+            "volume_trend": self.volume_trend,
+            "volume_strength": self.volume_strength,
+            "volume_distribution": self.volume_distribution,
+            "volume_profile": self.volume_profile,
+            "abnormal_volume_detected": self.abnormal_volume_detected,
+            "volume_breakout_signal": self.volume_breakout_signal,
+            "volume_climax": self.volume_climax,
+            "volume_divergence": self.volume_divergence
+        }
+
+
+@dataclass
 class TechnicalIndicators:
     """技术指标集合类"""
     # 趋势指标
@@ -206,13 +267,13 @@ class TechnicalIndicators:
     adx: float                              # ADX趋势强度
     adx_di_plus: float                      # +DI
     adx_di_minus: float                     # -DI
-    
+
     # 震荡指标
     rsi_14: float                           # 14周期RSI
     rsi_28: float                           # 28周期RSI
     stoch_k: float                          # 随机指标%K
     stoch_d: float                          # 随机指标%D
-    
+
     # 波动指标
     bb_upper: float                         # 布林带上轨
     bb_middle: float                        # 布林带中轨
@@ -220,18 +281,21 @@ class TechnicalIndicators:
     bb_percent: float                       # 布林带百分比
     bb_width: float                         # 布林带宽度
     atr: float                              # ATR
-    
-    # 成交量指标
+
+    # 增强成交量指标
     volume_sma: float                       # 成交量移动平均
     volume_ratio: float                     # 成交量比率
+
+    # 可选字段（必须在最后）
+    rsi_7: Optional[float] = None           # 7周期RSI（短期）
+    rsi_21: Optional[float] = None          # 21周期RSI（中期）
     vwap: Optional[float] = None            # 成交量加权平均价
-    
-    # 价格位置指标
-    price_position: float = 0.0             # 价格在区间中的位置（0-1）
+    volume_analysis: Optional[VolumeAnalysis] = None  # 详细成交量分析
     support_level: Optional[float] = None   # 支撑位
     resistance_level: Optional[float] = None # 阻力位
-    
-    # 计算时间
+
+    # 默认值字段
+    price_position: float = 0.0             # 价格在区间中的位置（0-1）
     timestamp: datetime = field(default_factory=datetime.now)
     
     def get_trend_signal(self) -> Tuple[TradingDirection, float]:
@@ -300,7 +364,7 @@ class TechnicalIndicators:
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""
-        return {
+        result = {
             "ema_9": self.ema_9,
             "ema_21": self.ema_21,
             "ema_50": self.ema_50,
@@ -310,6 +374,8 @@ class TechnicalIndicators:
             "adx_di_minus": self.adx_di_minus,
             "rsi_14": self.rsi_14,
             "rsi_28": self.rsi_28,
+            "rsi_7": self.rsi_7,
+            "rsi_21": self.rsi_21,
             "stoch_k": self.stoch_k,
             "stoch_d": self.stoch_d,
             "bb_upper": self.bb_upper,
@@ -327,28 +393,84 @@ class TechnicalIndicators:
             "timestamp": self.timestamp.isoformat()
         }
 
+        # 添加成交量分析（如果存在）
+        if self.volume_analysis:
+            result["volume_analysis"] = self.volume_analysis.to_dict()
+
+        return result
+
+
+@dataclass
+class CorrelationAnalysis:
+    """相关性分析结果类"""
+    asset_correlations: Dict[str, float]    # 与主要资产的相关性
+    correlation_strength: str               # 相关性强度（strong/medium/weak）
+    correlation_stability: float            # 相关性稳定性（0-1）
+    market_coupling: float                  # 市场耦合度（0-1）
+    correlation_breakdown_risk: float       # 相关性失效风险（0-1）
+    diversification_benefit: float          # 分散化收益（0-1）
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典格式"""
+        return {
+            "asset_correlations": self.asset_correlations,
+            "correlation_strength": self.correlation_strength,
+            "correlation_stability": self.correlation_stability,
+            "market_coupling": self.market_coupling,
+            "correlation_breakdown_risk": self.correlation_breakdown_risk,
+            "diversification_benefit": self.diversification_benefit
+        }
+
+
+@dataclass
+class MarketSentimentAnalysis:
+    """市场情绪分析结果类"""
+    fear_greed_index: float                 # 恐贪指数（0-100）
+    sentiment_label: str                    # 情绪标签（extreme_fear/fear/neutral/greed/extreme_greed）
+    market_stress_indicators: Dict[str, float] # 市场压力指标集合
+    volatility_sentiment: float             # 波动率情绪（0-1）
+    momentum_sentiment: float               # 动量情绪（0-1）
+    contrarian_signals: List[str]           # 逆向指标信号
+    sentiment_divergence: Optional[str] = None  # 情绪背离
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典格式"""
+        return {
+            "fear_greed_index": self.fear_greed_index,
+            "sentiment_label": self.sentiment_label,
+            "market_stress_indicators": self.market_stress_indicators,
+            "volatility_sentiment": self.volatility_sentiment,
+            "momentum_sentiment": self.momentum_sentiment,
+            "contrarian_signals": self.contrarian_signals,
+            "sentiment_divergence": self.sentiment_divergence
+        }
+
 
 @dataclass
 class MarketConditionAnalysis:
     """市场条件分析结果类"""
     primary_condition: MarketCondition      # 主要市场状态
     secondary_conditions: List[MarketCondition] = field(default_factory=list)  # 次要状态
-    
+
     # 市场环境指标
     trend_strength: float = 0.0             # 趋势强度（0-1）
     trend_direction: TradingDirection = TradingDirection.NEUTRAL  # 趋势方向
     liquidity_level: LiquidityLevel = LiquidityLevel.NORMAL      # 流动性水平
     market_sentiment: float = 0.5           # 市场情绪（0-1，0=极度恐慌，1=极度贪婪）
-    
+
+    # 增强分析模块
+    correlation_analysis: Optional[CorrelationAnalysis] = None    # 相关性分析
+    sentiment_analysis: Optional[MarketSentimentAnalysis] = None  # 情绪分析
+
     # 风险指标
     market_stress_level: float = 0.0        # 市场压力水平（0-1）
     correlation_breakdown: bool = False     # 相关性是否失效
     liquidity_crisis: bool = False          # 是否存在流动性危机
-    
+
     # 置信度和可靠性
     analysis_confidence: float = 0.8        # 分析置信度
     data_quality_score: float = 1.0         # 数据质量评分
-    
+
     # 时间信息
     analysis_time: datetime = field(default_factory=datetime.now)
     valid_until: Optional[datetime] = None   # 分析有效期
@@ -374,7 +496,7 @@ class MarketConditionAnalysis:
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""
-        return {
+        result = {
             "primary_condition": self.primary_condition.value,
             "secondary_conditions": [c.value for c in self.secondary_conditions],
             "trend_strength": self.trend_strength,
@@ -389,6 +511,15 @@ class MarketConditionAnalysis:
             "analysis_time": self.analysis_time.isoformat(),
             "valid_until": self.valid_until.isoformat() if self.valid_until else None
         }
+
+        # 添加增强分析模块（如果存在）
+        if self.correlation_analysis:
+            result["correlation_analysis"] = self.correlation_analysis.to_dict()
+
+        if self.sentiment_analysis:
+            result["sentiment_analysis"] = self.sentiment_analysis.to_dict()
+
+        return result
 
 
 @dataclass
@@ -751,6 +882,308 @@ class MarketAnalyzer:
                 calculation_period=period
             )
     
+    async def analyze_volume_comprehensive(
+        self,
+        ticker: str,
+        price_data: pd.DataFrame,
+        volume_data: Optional[pd.DataFrame] = None
+    ) -> VolumeAnalysis:
+        """
+        全面的成交量分析
+
+        Args:
+            ticker: 交易对符号
+            price_data: 价格数据
+            volume_data: 成交量数据（可选）
+
+        Returns:
+            VolumeAnalysis: 成交量分析结果
+        """
+        try:
+            # 获取成交量数据
+            if volume_data is not None and 'volume' in volume_data.columns:
+                volumes = volume_data['volume']
+            elif 'volume' in price_data.columns:
+                volumes = price_data['volume']
+            else:
+                # 如果没有成交量数据，返回默认分析
+                return self._create_default_volume_analysis()
+
+            prices = price_data['close']
+
+            # 1. 成交量趋势分析
+            volume_trend = self._analyze_volume_trend(volumes)
+
+            # 2. 成交量强度计算
+            volume_strength = self._calculate_volume_strength(volumes, prices)
+
+            # 3. 成交量分布统计
+            volume_distribution = self._calculate_volume_distribution(volumes)
+
+            # 4. 成交量价格分布（简化版Volume Profile）
+            volume_profile = self._calculate_volume_profile(prices, volumes)
+
+            # 5. 异常成交量检测
+            abnormal_volume_detected = self._detect_abnormal_volume(volumes)
+
+            # 6. 成交量突破信号
+            volume_breakout_signal = self._detect_volume_breakout(volumes, prices)
+
+            # 7. 成交量高潮检测
+            volume_climax = self._detect_volume_climax(volumes, prices)
+
+            # 8. 量价背离分析
+            volume_divergence = self._analyze_price_volume_divergence(prices, volumes)
+
+            return VolumeAnalysis(
+                volume_trend=volume_trend,
+                volume_strength=volume_strength,
+                volume_distribution=volume_distribution,
+                volume_profile=volume_profile,
+                abnormal_volume_detected=abnormal_volume_detected,
+                volume_breakout_signal=volume_breakout_signal,
+                volume_climax=volume_climax,
+                volume_divergence=volume_divergence
+            )
+
+        except Exception as e:
+            self.logger.error(f"成交量分析失败 {ticker}: {e}")
+            return self._create_default_volume_analysis()
+
+    def _analyze_volume_trend(self, volumes: pd.Series, period: int = 20) -> str:
+        """分析成交量趋势"""
+        try:
+            if len(volumes) < period:
+                return "stable"
+
+            recent_avg = volumes.tail(period // 2).mean()
+            previous_avg = volumes.tail(period).head(period // 2).mean()
+
+            change_ratio = (recent_avg / previous_avg - 1) if previous_avg > 0 else 0
+
+            if change_ratio > 0.2:
+                return "increasing"
+            elif change_ratio < -0.2:
+                return "decreasing"
+            else:
+                return "stable"
+        except Exception:
+            return "stable"
+
+    def _calculate_volume_strength(self, volumes: pd.Series, prices: pd.Series) -> float:
+        """计算成交量强度"""
+        try:
+            if len(volumes) < 20:
+                return 0.5
+
+            # 计算成交量的相对强度
+            volume_sma_20 = volumes.rolling(20).mean()
+            volume_sma_5 = volumes.rolling(5).mean()
+            current_volume = volumes.iloc[-1]
+
+            # 当前成交量与短期平均的比较
+            short_term_strength = current_volume / volume_sma_5.iloc[-1] if volume_sma_5.iloc[-1] > 0 else 1
+
+            # 短期平均与长期平均的比较
+            long_term_strength = volume_sma_5.iloc[-1] / volume_sma_20.iloc[-1] if volume_sma_20.iloc[-1] > 0 else 1
+
+            # 综合强度评分
+            combined_strength = (short_term_strength * 0.6 + long_term_strength * 0.4) / 2
+
+            # 标准化到0-1范围
+            return min(1.0, max(0.0, combined_strength))
+
+        except Exception:
+            return 0.5
+
+    def _calculate_volume_distribution(self, volumes: pd.Series) -> Dict[str, float]:
+        """计算成交量分布统计"""
+        try:
+            if len(volumes) == 0:
+                return {}
+
+            return {
+                "mean": float(volumes.mean()),
+                "median": float(volumes.median()),
+                "std": float(volumes.std()),
+                "percentile_25": float(volumes.quantile(0.25)),
+                "percentile_75": float(volumes.quantile(0.75)),
+                "percentile_90": float(volumes.quantile(0.90)),
+                "max": float(volumes.max()),
+                "min": float(volumes.min()),
+                "skewness": float(volumes.skew()) if len(volumes) > 1 else 0.0,
+                "kurtosis": float(volumes.kurtosis()) if len(volumes) > 1 else 0.0
+            }
+        except Exception:
+            return {}
+
+    def _calculate_volume_profile(self, prices: pd.Series, volumes: pd.Series) -> Dict[str, Any]:
+        """计算简化版成交量价格分布"""
+        try:
+            if len(prices) != len(volumes) or len(prices) < 20:
+                return {}
+
+            # 将价格分成10个区间
+            price_bins = 10
+            min_price = prices.min()
+            max_price = prices.max()
+
+            if max_price <= min_price:
+                return {}
+
+            price_range = max_price - min_price
+            bin_size = price_range / price_bins
+
+            volume_profile = {}
+            total_volume = volumes.sum()
+
+            for i in range(price_bins):
+                lower_bound = min_price + i * bin_size
+                upper_bound = min_price + (i + 1) * bin_size
+
+                # 找到在此价格区间的数据点
+                mask = (prices >= lower_bound) & (prices < upper_bound)
+                if i == price_bins - 1:  # 最后一个区间包含上边界
+                    mask = (prices >= lower_bound) & (prices <= upper_bound)
+
+                bin_volume = volumes[mask].sum()
+                volume_percentage = (bin_volume / total_volume * 100) if total_volume > 0 else 0
+
+                volume_profile[f"price_{lower_bound:.2f}_{upper_bound:.2f}"] = {
+                    "volume": float(bin_volume),
+                    "volume_percentage": float(volume_percentage),
+                    "price_range": [float(lower_bound), float(upper_bound)]
+                }
+
+            # 找到成交量最大的价格区间（POC - Point of Control）
+            max_volume_bin = max(volume_profile.items(), key=lambda x: x[1]["volume"])
+
+            return {
+                "profile": volume_profile,
+                "point_of_control": {
+                    "price_range": max_volume_bin[1]["price_range"],
+                    "volume_percentage": max_volume_bin[1]["volume_percentage"]
+                },
+                "total_volume": float(total_volume)
+            }
+
+        except Exception as e:
+            self.logger.warning(f"计算成交量分布失败: {e}")
+            return {}
+
+    def _detect_abnormal_volume(self, volumes: pd.Series, threshold: float = 2.5) -> bool:
+        """检测异常成交量"""
+        try:
+            if len(volumes) < 20:
+                return False
+
+            # 计算最近20期的平均成交量和标准差
+            recent_volumes = volumes.tail(20)
+            mean_volume = recent_volumes.mean()
+            std_volume = recent_volumes.std()
+
+            if std_volume == 0:
+                return False
+
+            # 检查最新成交量是否异常
+            current_volume = volumes.iloc[-1]
+            z_score = abs(current_volume - mean_volume) / std_volume
+
+            return z_score > threshold
+
+        except Exception:
+            return False
+
+    def _detect_volume_breakout(self, volumes: pd.Series, prices: pd.Series) -> bool:
+        """检测成交量突破信号"""
+        try:
+            if len(volumes) < 10 or len(prices) < 10:
+                return False
+
+            # 成交量突破：当前成交量显著高于平均水平且价格有明显变动
+            current_volume = volumes.iloc[-1]
+            avg_volume = volumes.tail(10).mean()
+            volume_breakout = current_volume > avg_volume * 1.5
+
+            # 价格变动
+            price_change = abs(prices.iloc[-1] / prices.iloc[-2] - 1) if len(prices) >= 2 else 0
+            significant_price_move = price_change > 0.02  # 2%以上的价格变动
+
+            return volume_breakout and significant_price_move
+
+        except Exception:
+            return False
+
+    def _detect_volume_climax(self, volumes: pd.Series, prices: pd.Series) -> bool:
+        """检测成交量高潮"""
+        try:
+            if len(volumes) < 5 or len(prices) < 5:
+                return False
+
+            # 成交量高潮：极高成交量伴随价格反转迹象
+            current_volume = volumes.iloc[-1]
+            max_recent_volume = volumes.tail(20).max() if len(volumes) >= 20 else volumes.max()
+
+            # 当前成交量是否达到近期峰值
+            volume_peak = current_volume >= max_recent_volume * 0.9
+
+            # 价格是否出现反转迹象（简化判断）
+            if len(prices) >= 3:
+                recent_prices = prices.tail(3)
+                price_reversal = (
+                    (recent_prices.iloc[0] < recent_prices.iloc[1] > recent_prices.iloc[2]) or
+                    (recent_prices.iloc[0] > recent_prices.iloc[1] < recent_prices.iloc[2])
+                )
+            else:
+                price_reversal = False
+
+            return volume_peak and price_reversal
+
+        except Exception:
+            return False
+
+    def _analyze_price_volume_divergence(self, prices: pd.Series, volumes: pd.Series, period: int = 14) -> Optional[str]:
+        """分析量价背离"""
+        try:
+            if len(prices) < period or len(volumes) < period:
+                return None
+
+            # 计算价格和成交量的趋势
+            recent_prices = prices.tail(period)
+            recent_volumes = volumes.tail(period)
+
+            # 价格趋势（线性回归斜率）
+            price_x = np.arange(len(recent_prices))
+            price_trend = np.polyfit(price_x, recent_prices, 1)[0]
+
+            # 成交量趋势
+            volume_x = np.arange(len(recent_volumes))
+            volume_trend = np.polyfit(volume_x, recent_volumes, 1)[0]
+
+            # 判断背离
+            if price_trend > 0 and volume_trend < 0:
+                return "bearish"  # 价格上涨但成交量下降，看跌背离
+            elif price_trend < 0 and volume_trend > 0:
+                return "bullish"  # 价格下跌但成交量上升，看涨背离
+            else:
+                return None  # 无明显背离
+
+        except Exception:
+            return None
+
+    def _create_default_volume_analysis(self) -> VolumeAnalysis:
+        """创建默认的成交量分析结果"""
+        return VolumeAnalysis(
+            volume_trend="stable",
+            volume_strength=0.5,
+            volume_distribution={},
+            volume_profile={},
+            abnormal_volume_detected=False,
+            volume_breakout_signal=False,
+            volume_climax=False,
+            volume_divergence=None
+        )
+
     async def calculate_technical_indicators(
         self,
         ticker: str,
@@ -787,9 +1220,11 @@ class MarketAnalyzer:
             adx_di_plus = float(adx_data['+di'].iloc[-1])
             adx_di_minus = float(adx_data['-di'].iloc[-1])
             
-            # 2. 震荡指标
+            # 2. 震荡指标（增强多周期RSI）
             rsi_14 = float(calculate_rsi(price_data, 14).iloc[-1])
             rsi_28 = float(calculate_rsi(price_data, 28).iloc[-1])
+            rsi_7 = float(calculate_rsi(price_data, 7).iloc[-1]) if len(price_data) >= 7 else rsi_14
+            rsi_21 = float(calculate_rsi(price_data, 21).iloc[-1]) if len(price_data) >= 21 else rsi_28
             
             # 随机指标
             stoch_k, stoch_d = self._calculate_stochastic(price_data)
@@ -809,12 +1244,13 @@ class MarketAnalyzer:
             # ATR
             atr = float(calculate_atr(price_data, 14).iloc[-1])
             
-            # 4. 成交量指标
+            # 4. 增强成交量指标
+            volume_analysis = None
             if volume_data is not None and 'volume' in volume_data.columns:
                 volume_sma = float(volume_data['volume'].rolling(21).mean().iloc[-1])
                 current_volume = float(volume_data['volume'].iloc[-1])
                 volume_ratio = current_volume / volume_sma if volume_sma > 0 else 1.0
-                
+
                 # VWAP计算
                 if all(col in price_data.columns for col in ['high', 'low', 'close']):
                     typical_price = (price_data['high'] + price_data['low'] + price_data['close']) / 3
@@ -822,11 +1258,18 @@ class MarketAnalyzer:
                     vwap_val = float(vwap.iloc[-1]) if not vwap.empty else None
                 else:
                     vwap_val = None
+
+                # 执行详细成交量分析
+                volume_analysis = await self.analyze_volume_comprehensive(ticker, price_data, volume_data)
+
             elif 'volume' in price_data.columns:
                 volume_sma = float(price_data['volume'].rolling(21).mean().iloc[-1])
                 current_volume = float(price_data['volume'].iloc[-1])
                 volume_ratio = current_volume / volume_sma if volume_sma > 0 else 1.0
                 vwap_val = None
+
+                # 执行详细成交量分析
+                volume_analysis = await self.analyze_volume_comprehensive(ticker, price_data)
             else:
                 volume_sma = 0.0
                 volume_ratio = 1.0
@@ -853,6 +1296,8 @@ class MarketAnalyzer:
                 adx_di_minus=adx_di_minus,
                 rsi_14=rsi_14,
                 rsi_28=rsi_28,
+                rsi_7=rsi_7,
+                rsi_21=rsi_21,
                 stoch_k=stoch_k,
                 stoch_d=stoch_d,
                 bb_upper=bb_upper_val,
@@ -864,6 +1309,7 @@ class MarketAnalyzer:
                 volume_sma=volume_sma,
                 volume_ratio=volume_ratio,
                 vwap=vwap_val,
+                volume_analysis=volume_analysis,
                 price_position=float(price_position),
                 support_level=support_level,
                 resistance_level=resistance_level
@@ -886,6 +1332,501 @@ class MarketAnalyzer:
         except Exception:
             return 50.0, 50.0  # 默认中性值
     
+    async def analyze_correlation_comprehensive(
+        self,
+        ticker: str,
+        price_data: pd.DataFrame,
+        reference_data: Optional[Dict[str, pd.DataFrame]] = None
+    ) -> CorrelationAnalysis:
+        """
+        全面的相关性分析
+
+        Args:
+            ticker: 交易对符号
+            price_data: 价格数据
+            reference_data: 参考资产数据字典（可选）
+
+        Returns:
+            CorrelationAnalysis: 相关性分析结果
+        """
+        try:
+            # 如果没有参考数据，使用模拟的主要资产相关性
+            if reference_data is None:
+                reference_data = self._generate_reference_correlations(ticker)
+
+            returns = price_data['close'].pct_change(fill_method=None).dropna()
+
+            # 1. 计算与主要资产的相关性
+            asset_correlations = self._calculate_asset_correlations(returns, reference_data)
+
+            # 2. 评估相关性强度
+            correlation_strength = self._evaluate_correlation_strength(asset_correlations)
+
+            # 3. 计算相关性稳定性
+            correlation_stability = self._calculate_correlation_stability(returns, reference_data)
+
+            # 4. 市场耦合度
+            market_coupling = self._calculate_market_coupling(asset_correlations)
+
+            # 5. 相关性失效风险
+            correlation_breakdown_risk = self._assess_correlation_breakdown_risk(returns, reference_data)
+
+            # 6. 分散化收益
+            diversification_benefit = self._calculate_diversification_benefit(asset_correlations)
+
+            return CorrelationAnalysis(
+                asset_correlations=asset_correlations,
+                correlation_strength=correlation_strength,
+                correlation_stability=correlation_stability,
+                market_coupling=market_coupling,
+                correlation_breakdown_risk=correlation_breakdown_risk,
+                diversification_benefit=diversification_benefit
+            )
+
+        except Exception as e:
+            self.logger.error(f"相关性分析失败 {ticker}: {e}")
+            return self._create_default_correlation_analysis()
+
+    def _generate_reference_correlations(self, ticker: str) -> Dict[str, float]:
+        """生成参考资产相关性（模拟数据）"""
+        try:
+            # 基于ticker类型生成合理的相关性值
+            ticker_upper = ticker.upper()
+
+            correlations = {}
+
+            if 'BTC' in ticker_upper:
+                correlations = {
+                    'ETH': 0.75,
+                    'SP500': 0.45,
+                    'GOLD': -0.15,
+                    'DXY': -0.35,
+                    'VIX': -0.25
+                }
+            elif 'ETH' in ticker_upper:
+                correlations = {
+                    'BTC': 0.75,
+                    'SP500': 0.40,
+                    'GOLD': -0.10,
+                    'DXY': -0.30,
+                    'VIX': -0.20
+                }
+            else:
+                # 其他加密货币
+                correlations = {
+                    'BTC': 0.60,
+                    'ETH': 0.55,
+                    'SP500': 0.35,
+                    'GOLD': -0.05,
+                    'DXY': -0.25,
+                    'VIX': -0.15
+                }
+
+            return correlations
+
+        except Exception:
+            return {}
+
+    def _calculate_asset_correlations(self, returns: pd.Series, reference_data: Dict[str, Any]) -> Dict[str, float]:
+        """计算与主要资产的相关性"""
+        try:
+            if isinstance(reference_data, dict) and 'BTC' in reference_data:
+                # 如果reference_data包含实际价格数据
+                correlations = {}
+                for asset, data in reference_data.items():
+                    if isinstance(data, pd.DataFrame) and 'close' in data.columns:
+                        asset_returns = data['close'].pct_change(fill_method=None).dropna()
+                        # 确保时间序列对齐
+                        aligned_returns = returns.align(asset_returns, join='inner')[0]
+                        aligned_asset_returns = returns.align(asset_returns, join='inner')[1]
+
+                        if len(aligned_returns) > 10:  # 需要足够的数据点
+                            correlation = aligned_returns.corr(aligned_asset_returns)
+                            correlations[asset] = float(correlation) if not pd.isna(correlation) else 0.0
+                        else:
+                            correlations[asset] = 0.0
+                return correlations
+            else:
+                # 使用模拟相关性数据
+                return reference_data if isinstance(reference_data, dict) else {}
+
+        except Exception:
+            return {}
+
+    def _evaluate_correlation_strength(self, correlations: Dict[str, float]) -> str:
+        """评估相关性强度"""
+        try:
+            if not correlations:
+                return "weak"
+
+            avg_abs_correlation = sum(abs(corr) for corr in correlations.values()) / len(correlations)
+
+            if avg_abs_correlation > 0.7:
+                return "strong"
+            elif avg_abs_correlation > 0.4:
+                return "medium"
+            else:
+                return "weak"
+
+        except Exception:
+            return "weak"
+
+    def _calculate_correlation_stability(self, returns: pd.Series, reference_data: Dict[str, Any], window: int = 30) -> float:
+        """计算相关性稳定性"""
+        try:
+            if len(returns) < window * 2:
+                return 0.5
+
+            # 计算滚动相关性的标准差作为稳定性指标
+            if isinstance(reference_data, dict) and any(isinstance(v, pd.DataFrame) for v in reference_data.values()):
+                # 使用实际数据计算稳定性
+                stabilities = []
+                for asset, data in reference_data.items():
+                    if isinstance(data, pd.DataFrame) and 'close' in data.columns:
+                        asset_returns = data['close'].pct_change(fill_method=None).dropna()
+                        aligned_returns = returns.align(asset_returns, join='inner')[0]
+                        aligned_asset_returns = returns.align(asset_returns, join='inner')[1]
+
+                        if len(aligned_returns) > window:
+                            rolling_corr = aligned_returns.rolling(window).corr(aligned_asset_returns)
+                            corr_stability = 1.0 - rolling_corr.std() if rolling_corr.std() > 0 else 1.0
+                            stabilities.append(max(0.0, min(1.0, corr_stability)))
+
+                return sum(stabilities) / len(stabilities) if stabilities else 0.5
+            else:
+                # 使用价格波动性作为稳定性代理
+                volatility = returns.rolling(window).std().std()
+                # 低波动性通常意味着更稳定的相关性
+                stability = max(0.0, min(1.0, 1.0 - volatility * 10))
+                return stability
+
+        except Exception:
+            return 0.5
+
+    def _calculate_market_coupling(self, correlations: Dict[str, float]) -> float:
+        """计算市场耦合度"""
+        try:
+            if not correlations:
+                return 0.5
+
+            # 与传统金融市场（如SP500）的相关性作为耦合度指标
+            traditional_assets = ['SP500', 'GOLD', 'DXY']
+            traditional_correlations = [abs(correlations.get(asset, 0)) for asset in traditional_assets]
+
+            if traditional_correlations:
+                coupling = sum(traditional_correlations) / len(traditional_correlations)
+                return min(1.0, max(0.0, coupling))
+            else:
+                # 如果没有传统资产相关性，使用平均相关性
+                avg_correlation = sum(abs(corr) for corr in correlations.values()) / len(correlations)
+                return min(1.0, max(0.0, avg_correlation))
+
+        except Exception:
+            return 0.5
+
+    def _assess_correlation_breakdown_risk(self, returns: pd.Series, reference_data: Dict[str, Any]) -> float:
+        """评估相关性失效风险"""
+        try:
+            # 使用价格波动性和相关性变化作为失效风险指标
+            if len(returns) < 60:  # 需要至少2个月数据
+                return 0.5
+
+            # 计算最近的波动性变化
+            recent_vol = returns.tail(30).std()
+            historical_vol = returns.std()
+            vol_change = abs(recent_vol / historical_vol - 1) if historical_vol > 0 else 0
+
+            # 计算相关性变化（简化版本）
+            correlation_instability = 1.0 - self._calculate_correlation_stability(returns, reference_data)
+
+            # 综合风险评分
+            risk_score = (vol_change * 0.6 + correlation_instability * 0.4)
+            return min(1.0, max(0.0, risk_score))
+
+        except Exception:
+            return 0.5
+
+    def _calculate_diversification_benefit(self, correlations: Dict[str, float]) -> float:
+        """计算分散化收益"""
+        try:
+            if not correlations:
+                return 0.5
+
+            # 分散化收益与相关性成反比
+            avg_correlation = sum(abs(corr) for corr in correlations.values()) / len(correlations)
+            diversification_benefit = 1.0 - avg_correlation
+
+            return min(1.0, max(0.0, diversification_benefit))
+
+        except Exception:
+            return 0.5
+
+    def _create_default_correlation_analysis(self) -> CorrelationAnalysis:
+        """创建默认的相关性分析结果"""
+        return CorrelationAnalysis(
+            asset_correlations={},
+            correlation_strength="weak",
+            correlation_stability=0.5,
+            market_coupling=0.5,
+            correlation_breakdown_risk=0.5,
+            diversification_benefit=0.5
+        )
+
+    async def analyze_market_sentiment_comprehensive(
+        self,
+        ticker: str,
+        price_data: pd.DataFrame,
+        volume_data: Optional[pd.DataFrame] = None
+    ) -> MarketSentimentAnalysis:
+        """
+        全面的市场情绪分析
+
+        Args:
+            ticker: 交易对符号
+            price_data: 价格数据
+            volume_data: 成交量数据（可选）
+
+        Returns:
+            MarketSentimentAnalysis: 市场情绪分析结果
+        """
+        try:
+            returns = price_data['close'].pct_change(fill_method=None).dropna()
+
+            # 1. 计算恐贪指数
+            fear_greed_index = self._calculate_fear_greed_index(price_data, returns, volume_data)
+
+            # 2. 情绪标签
+            sentiment_label = self._determine_sentiment_label(fear_greed_index)
+
+            # 3. 市场压力指标
+            market_stress_indicators = self._calculate_market_stress_indicators(returns, price_data)
+
+            # 4. 波动率情绪
+            volatility_sentiment = self._calculate_volatility_sentiment(returns)
+
+            # 5. 动量情绪
+            momentum_sentiment = self._calculate_momentum_sentiment(returns)
+
+            # 6. 逆向指标信号
+            contrarian_signals = self._identify_contrarian_signals(fear_greed_index, returns)
+
+            # 7. 情绪背离
+            sentiment_divergence = self._detect_sentiment_divergence(returns, fear_greed_index)
+
+            return MarketSentimentAnalysis(
+                fear_greed_index=fear_greed_index,
+                sentiment_label=sentiment_label,
+                market_stress_indicators=market_stress_indicators,
+                volatility_sentiment=volatility_sentiment,
+                momentum_sentiment=momentum_sentiment,
+                contrarian_signals=contrarian_signals,
+                sentiment_divergence=sentiment_divergence
+            )
+
+        except Exception as e:
+            self.logger.error(f"市场情绪分析失败 {ticker}: {e}")
+            return self._create_default_sentiment_analysis()
+
+    def _calculate_fear_greed_index(self, price_data: pd.DataFrame, returns: pd.Series, volume_data: Optional[pd.DataFrame]) -> float:
+        """计算恐贪指数（0-100）"""
+        try:
+            components = {}
+
+            # 1. 价格动量（30%权重）
+            if len(returns) >= 30:
+                momentum_30d = (price_data['close'].iloc[-1] / price_data['close'].iloc[-30] - 1) * 100
+                momentum_score = min(100, max(0, 50 + momentum_30d * 2))  # 标准化到0-100
+                components['momentum'] = momentum_score * 0.3
+
+            # 2. 波动率（25%权重）
+            volatility = returns.std() * math.sqrt(252) * 100  # 年化波动率百分比
+            volatility_score = max(0, min(100, 100 - volatility))  # 高波动率 = 恐慌
+            components['volatility'] = volatility_score * 0.25
+
+            # 3. RSI指标（20%权重）
+            if len(price_data) >= 14:
+                rsi = calculate_rsi(price_data, 14).iloc[-1]
+                rsi_score = min(100, max(0, rsi))
+                components['rsi'] = rsi_score * 0.2
+
+            # 4. 成交量指标（15%权重）
+            if volume_data is not None or 'volume' in price_data.columns:
+                volumes = volume_data['volume'] if volume_data is not None else price_data['volume']
+                if len(volumes) >= 20:
+                    current_volume = volumes.iloc[-1]
+                    avg_volume = volumes.rolling(20).mean().iloc[-1]
+                    volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1
+                    volume_score = min(100, max(0, 50 + (volume_ratio - 1) * 50))
+                    components['volume'] = volume_score * 0.15
+                else:
+                    components['volume'] = 50 * 0.15
+            else:
+                components['volume'] = 50 * 0.15
+
+            # 5. 市场支配地位（10%权重）- 简化版
+            if len(price_data) >= 52:
+                price_position = (price_data['close'].iloc[-1] - price_data['close'].rolling(52).min().iloc[-1]) / (price_data['close'].rolling(52).max().iloc[-1] - price_data['close'].rolling(52).min().iloc[-1])
+                dominance_score = price_position * 100
+                components['dominance'] = dominance_score * 0.1
+            else:
+                components['dominance'] = 50 * 0.1
+
+            # 综合恐贪指数
+            fear_greed_index = sum(components.values())
+            return min(100, max(0, fear_greed_index))
+
+        except Exception:
+            return 50.0  # 中性值
+
+    def _determine_sentiment_label(self, fear_greed_index: float) -> str:
+        """根据恐贪指数确定情绪标签"""
+        if fear_greed_index <= 10:
+            return "extreme_fear"
+        elif fear_greed_index <= 25:
+            return "fear"
+        elif fear_greed_index <= 45:
+            return "neutral"
+        elif fear_greed_index <= 75:
+            return "greed"
+        else:
+            return "extreme_greed"
+
+    def _calculate_market_stress_indicators(self, returns: pd.Series, price_data: pd.DataFrame) -> Dict[str, float]:
+        """计算市场压力指标集合"""
+        try:
+            indicators = {}
+
+            # VIX指数代理（基于21日滚动波动率）
+            if len(returns) >= 21:
+                rolling_vol = returns.rolling(21).std() * math.sqrt(252) * 100
+                vix_proxy = rolling_vol.iloc[-1]
+                indicators['vix_proxy'] = min(100, max(0, vix_proxy))
+
+            # 最大回撤压力
+            if len(price_data) >= 30:
+                cumulative = (1 + returns).cumprod()
+                rolling_max = cumulative.rolling(30).max()
+                drawdown = ((cumulative - rolling_max) / rolling_max).abs()
+                max_drawdown_30d = drawdown.max() * 100
+                indicators['drawdown_stress'] = min(100, max(0, max_drawdown_30d))
+
+            # 价格跳跃频率
+            if len(returns) >= 20:
+                large_moves = (abs(returns) > 2 * returns.std()).sum()
+                jump_frequency = (large_moves / len(returns)) * 100
+                indicators['jump_frequency'] = min(100, max(0, jump_frequency))
+
+            return indicators
+
+        except Exception:
+            return {}
+
+    def _calculate_volatility_sentiment(self, returns: pd.Series) -> float:
+        """计算波动率情绪"""
+        try:
+            if len(returns) < 30:
+                return 0.5
+
+            current_vol = returns.tail(7).std() * math.sqrt(252)  # 最近一周年化波动率
+            historical_vol = returns.std() * math.sqrt(252)  # 历史波动率
+
+            if historical_vol == 0:
+                return 0.5
+
+            vol_ratio = current_vol / historical_vol
+
+            # 转换为情绪分数（高波动率 = 恐慌情绪 = 低分）
+            sentiment = max(0, min(1, 1 / (1 + vol_ratio)))
+
+            return sentiment
+
+        except Exception:
+            return 0.5
+
+    def _calculate_momentum_sentiment(self, returns: pd.Series) -> float:
+        """计算动量情绪"""
+        try:
+            if len(returns) < 10:
+                return 0.5
+
+            # 使用短期动量作为情绪指标
+            momentum_5d = returns.tail(5).mean()
+            momentum_10d = returns.tail(10).mean()
+
+            # 组合动量
+            combined_momentum = momentum_5d * 0.6 + momentum_10d * 0.4
+
+            # 转换为0-1范围
+            sentiment = max(0, min(1, 0.5 + combined_momentum * 10))
+
+            return sentiment
+
+        except Exception:
+            return 0.5
+
+    def _identify_contrarian_signals(self, fear_greed_index: float, returns: pd.Series) -> List[str]:
+        """识别逆向指标信号"""
+        signals = []
+
+        try:
+            # 极端恐慌信号
+            if fear_greed_index <= 10:
+                signals.append("extreme_fear_buy_signal")
+
+            # 极端贪婪信号
+            if fear_greed_index >= 90:
+                signals.append("extreme_greed_sell_signal")
+
+            # 波动率异常低
+            if len(returns) >= 20:
+                recent_vol = returns.tail(10).std()
+                historical_vol = returns.std()
+                if recent_vol < historical_vol * 0.5:
+                    signals.append("low_volatility_warning")
+
+            # 连续上涨警告
+            if len(returns) >= 7:
+                consecutive_up = all(returns.tail(7) > 0)
+                if consecutive_up:
+                    signals.append("consecutive_gains_warning")
+
+            return signals
+
+        except Exception:
+            return []
+
+    def _detect_sentiment_divergence(self, returns: pd.Series, fear_greed_index: float) -> Optional[str]:
+        """检测情绪背离"""
+        try:
+            if len(returns) < 20:
+                return None
+
+            # 价格动量
+            price_momentum = returns.tail(10).mean()
+
+            # 情绪vs价格背离
+            if fear_greed_index > 70 and price_momentum < -0.005:  # 高贪婪但价格下跌
+                return "bearish_divergence"
+            elif fear_greed_index < 30 and price_momentum > 0.005:  # 高恐慌但价格上涨
+                return "bullish_divergence"
+
+            return None
+
+        except Exception:
+            return None
+
+    def _create_default_sentiment_analysis(self) -> MarketSentimentAnalysis:
+        """创建默认的市场情绪分析结果"""
+        return MarketSentimentAnalysis(
+            fear_greed_index=50.0,
+            sentiment_label="neutral",
+            market_stress_indicators={},
+            volatility_sentiment=0.5,
+            momentum_sentiment=0.5,
+            contrarian_signals=[],
+            sentiment_divergence=None
+        )
+
     async def analyze_market_conditions(
         self,
         ticker: str,
@@ -906,41 +1847,51 @@ class MarketAnalyzer:
         try:
             # 计算基础指标
             returns = price_data['close'].pct_change(fill_method=None).dropna()
-            
+
             # 1. 趋势分析
             trend_strength, trend_direction = self._analyze_trend(price_data)
-            
+
             # 2. 流动性分析
             liquidity_level = self._analyze_liquidity(price_data, volume_data)
-            
-            # 3. 市场情绪分析
+
+            # 3. 基础市场情绪分析
             market_sentiment = self._analyze_market_sentiment(returns)
-            
+
             # 4. 市场压力分析
             market_stress_level = self._calculate_market_stress(returns, price_data)
-            
+
             # 5. 相关性分析
             correlation_breakdown = self._detect_correlation_breakdown(returns)
-            
+
             # 6. 流动性危机检测
             liquidity_crisis = self._detect_liquidity_crisis(price_data, volume_data)
-            
-            # 7. 确定主要市场条件
+
+            # 7. 增强分析模块
+            # 执行全面的相关性分析
+            correlation_analysis = await self.analyze_correlation_comprehensive(ticker, price_data)
+
+            # 执行全面的市场情绪分析
+            sentiment_analysis = await self.analyze_market_sentiment_comprehensive(ticker, price_data, volume_data)
+
+            # 使用增强的市场情绪
+            market_sentiment = sentiment_analysis.fear_greed_index / 100.0  # 转换为0-1范围
+
+            # 8. 确定主要市场条件
             primary_condition = self._determine_primary_market_condition(
                 trend_strength, trend_direction, market_stress_level, liquidity_level
             )
-            
-            # 8. 次要条件
+
+            # 9. 次要条件
             secondary_conditions = self._identify_secondary_conditions(
                 market_sentiment, liquidity_level, market_stress_level
             )
-            
-            # 9. 计算分析置信度
+
+            # 10. 计算分析置信度
             analysis_confidence = self._calculate_analysis_confidence(price_data, volume_data)
-            
-            # 10. 数据质量评估
+
+            # 11. 数据质量评估
             data_quality_score = self._assess_data_quality(price_data)
-            
+
             return MarketConditionAnalysis(
                 primary_condition=primary_condition,
                 secondary_conditions=secondary_conditions,
@@ -948,6 +1899,8 @@ class MarketAnalyzer:
                 trend_direction=trend_direction,
                 liquidity_level=liquidity_level,
                 market_sentiment=market_sentiment,
+                correlation_analysis=correlation_analysis,
+                sentiment_analysis=sentiment_analysis,
                 market_stress_level=market_stress_level,
                 correlation_breakdown=correlation_breakdown,
                 liquidity_crisis=liquidity_crisis,
@@ -1631,6 +2584,178 @@ class MarketAnalyzer:
         except Exception as e:
             self.logger.warning(f"清理缓存失败: {e}")
     
+    async def get_leverage_support_data(
+        self,
+        ticker: str,
+        price_data: Optional[pd.DataFrame] = None,
+        volume_data: Optional[pd.DataFrame] = None
+    ) -> Dict[str, Any]:
+        """
+        为杠杆控制器提供增强数据支持
+
+        Args:
+            ticker: 交易对符号
+            price_data: 价格数据（可选）
+            volume_data: 成交量数据（可选）
+
+        Returns:
+            Dict[str, Any]: 杠杆控制器所需的增强数据
+        """
+        try:
+            # 如果没有提供数据，尝试获取
+            if price_data is None:
+                # 如果有增强版分析器，尝试获取实时数据
+                if hasattr(self, 'get_real_time_klines'):
+                    price_data = await self.get_real_time_klines(ticker, "1h", 200)
+
+                if price_data is None or len(price_data) < 50:
+                    self.logger.warning(f"无法获取足够的价格数据用于杠杆分析: {ticker}")
+                    return self._generate_default_leverage_data()
+
+            # 执行各项分析
+            tasks = [
+                self.calculate_volatility_metrics(ticker, price_data),
+                self.analyze_volume_comprehensive(ticker, price_data, volume_data),
+                self.analyze_correlation_comprehensive(ticker, price_data),
+                self.analyze_market_sentiment_comprehensive(ticker, price_data, volume_data),
+                self.calculate_risk_metrics(ticker, price_data)
+            ]
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            volatility_metrics, volume_analysis, correlation_analysis, sentiment_analysis, risk_metrics = results
+
+            # 检查结果有效性
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    self.logger.warning(f"杠杆支持数据分析任务 {i} 失败: {result}")
+
+            # 构造杠杆控制器专用数据
+            leverage_data = {
+                "timestamp": datetime.now().isoformat(),
+                "ticker": ticker,
+
+                # 多周期波动率计算
+                "enhanced_volatility": {
+                    "current": float(volatility_metrics.historical_volatility) if volatility_metrics else 0.2,
+                    "regime": volatility_metrics.volatility_regime.value if volatility_metrics else "normal",
+                    "percentile": float(volatility_metrics.volatility_percentile) if volatility_metrics else 0.5,
+                    "z_score": float(volatility_metrics.volatility_z_score) if volatility_metrics else 0.0,
+                    "multiple_estimators": {
+                        "parkinson": float(volatility_metrics.parkinson_volatility) if volatility_metrics else 0.2,
+                        "garman_klass": float(volatility_metrics.garman_klass_volatility) if volatility_metrics else 0.2,
+                        "yang_zhang": float(volatility_metrics.yang_zhang_volatility) if volatility_metrics else 0.2
+                    }
+                },
+
+                # 成交量分布特征
+                "volume_characteristics": {
+                    "strength": float(volume_analysis.volume_strength) if volume_analysis else 0.5,
+                    "trend": volume_analysis.volume_trend if volume_analysis else "stable",
+                    "abnormal_detected": volume_analysis.abnormal_volume_detected if volume_analysis else False,
+                    "breakout_signal": volume_analysis.volume_breakout_signal if volume_analysis else False,
+                    "distribution": volume_analysis.volume_distribution if volume_analysis else {},
+                    "volume_profile": volume_analysis.volume_profile if volume_analysis else {}
+                },
+
+                # 市场关联度计算
+                "market_correlation": {
+                    "strength": correlation_analysis.correlation_strength if correlation_analysis else "weak",
+                    "stability": float(correlation_analysis.correlation_stability) if correlation_analysis else 0.5,
+                    "market_coupling": float(correlation_analysis.market_coupling) if correlation_analysis else 0.5,
+                    "breakdown_risk": float(correlation_analysis.correlation_breakdown_risk) if correlation_analysis else 0.5,
+                    "diversification_benefit": float(correlation_analysis.diversification_benefit) if correlation_analysis else 0.5,
+                    "asset_correlations": correlation_analysis.asset_correlations if correlation_analysis else {}
+                },
+
+                # 恐贪指数和市场状态
+                "market_sentiment": {
+                    "fear_greed_index": float(sentiment_analysis.fear_greed_index) if sentiment_analysis else 50.0,
+                    "sentiment_label": sentiment_analysis.sentiment_label if sentiment_analysis else "neutral",
+                    "volatility_sentiment": float(sentiment_analysis.volatility_sentiment) if sentiment_analysis else 0.5,
+                    "momentum_sentiment": float(sentiment_analysis.momentum_sentiment) if sentiment_analysis else 0.5,
+                    "stress_indicators": sentiment_analysis.market_stress_indicators if sentiment_analysis else {},
+                    "contrarian_signals": sentiment_analysis.contrarian_signals if sentiment_analysis else []
+                },
+
+                # 风险调整因子
+                "risk_adjustments": {
+                    "overall_risk_score": float(risk_metrics.overall_risk_score) if risk_metrics else 50.0,
+                    "risk_level": risk_metrics.risk_level.value if risk_metrics else "medium",
+                    "adjustment_factor": risk_metrics.get_risk_adjustment_factor() if risk_metrics else 1.0,
+                    "max_drawdown": float(risk_metrics.max_drawdown) if risk_metrics else 0.1,
+                    "volatility_risk": float(risk_metrics.volatility_risk) if risk_metrics else 20.0,
+                    "tail_risk": float(risk_metrics.tail_risk) if risk_metrics else 10.0
+                },
+
+                # 性能优化标记
+                "calculation_metrics": {
+                    "data_points": len(price_data),
+                    "analysis_modules_completed": sum(1 for r in results if not isinstance(r, Exception)),
+                    "computation_time_estimate": "< 5ms"  # 目标性能
+                }
+            }
+
+            return leverage_data
+
+        except Exception as e:
+            self.logger.error(f"获取杠杆支持数据失败 {ticker}: {e}")
+            return self._generate_default_leverage_data()
+
+    def _generate_default_leverage_data(self) -> Dict[str, Any]:
+        """生成默认的杠杆支持数据"""
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "ticker": "UNKNOWN",
+            "enhanced_volatility": {
+                "current": 0.2,
+                "regime": "normal",
+                "percentile": 0.5,
+                "z_score": 0.0,
+                "multiple_estimators": {
+                    "parkinson": 0.2,
+                    "garman_klass": 0.2,
+                    "yang_zhang": 0.2
+                }
+            },
+            "volume_characteristics": {
+                "strength": 0.5,
+                "trend": "stable",
+                "abnormal_detected": False,
+                "breakout_signal": False,
+                "distribution": {},
+                "volume_profile": {}
+            },
+            "market_correlation": {
+                "strength": "weak",
+                "stability": 0.5,
+                "market_coupling": 0.5,
+                "breakdown_risk": 0.5,
+                "diversification_benefit": 0.5,
+                "asset_correlations": {}
+            },
+            "market_sentiment": {
+                "fear_greed_index": 50.0,
+                "sentiment_label": "neutral",
+                "volatility_sentiment": 0.5,
+                "momentum_sentiment": 0.5,
+                "stress_indicators": {},
+                "contrarian_signals": []
+            },
+            "risk_adjustments": {
+                "overall_risk_score": 50.0,
+                "risk_level": "medium",
+                "adjustment_factor": 1.0,
+                "max_drawdown": 0.1,
+                "volatility_risk": 20.0,
+                "tail_risk": 10.0
+            },
+            "calculation_metrics": {
+                "data_points": 0,
+                "analysis_modules_completed": 0,
+                "computation_time_estimate": "< 5ms"
+            }
+        }
+
     def get_analysis_summary(self, ticker: str) -> Optional[Dict[str, Any]]:
         """获取分析摘要"""
         try:
@@ -1638,7 +2763,7 @@ class MarketAnalyzer:
             ticker_keys = [key for key in self._analysis_cache.keys() if key.startswith(ticker)]
             if not ticker_keys:
                 return None
-            
+
             latest_key = max(ticker_keys, key=lambda k: self._analysis_cache[k]["timestamp"])
             return self._analysis_cache[latest_key]["data"]
         except Exception as e:
@@ -1650,9 +2775,12 @@ class MarketAnalyzer:
 __all__ = [
     'MarketAnalyzer',
     'VolatilityMetrics',
-    'TechnicalIndicators', 
+    'TechnicalIndicators',
     'MarketConditionAnalysis',
     'RiskMetrics',
+    'VolumeAnalysis',
+    'CorrelationAnalysis',
+    'MarketSentimentAnalysis',
     'MarketCondition',
     'VolatilityRegime',
     'LiquidityLevel'
