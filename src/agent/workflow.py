@@ -1,7 +1,7 @@
 from typing import List
 from langgraph.graph import END, StateGraph
-from graph import AgentState, StartNode, DataNode, EmptyNode, RiskManagementNode, PortfolioManagementNode
-from utils import import_strategy_class, Interval
+from src.graph import AgentState, StartNode, DataNode, EmptyNode, RiskManagementNode, PortfolioManagementNode
+from src.utils import import_strategy_class, Interval
 
 
 class Workflow:

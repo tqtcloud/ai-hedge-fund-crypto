@@ -1,4 +1,7 @@
-mode: live # backtest, live, paper
+# Binance官方SDK配置示例
+# 基于binance-connector-python项目的完整配置示例
+
+mode: backtest # backtest, live, paper
 start_date: 2025-08-30
 end_date: 2025-09-04
 primary_interval: 1h
@@ -6,186 +9,104 @@ initial_cash: 1000
 margin_requirement: 0.0
 show_reasoning: true
 show_agent_graph: false
+
 signals:
-  intervals: ["30m", "1h", "4h", "15m", "5m"]  # 要分析的时间框架
+  intervals: ["30m", "1h", "4h", "15m", "5m"]
   tickers: ["BNBUSDT"]
   strategies: ['MacdStrategy', 'RSIStrategy']
+
 model:
-  name: "ep-20250722234153-nsm5d" # choose your model.
-  provider: "openai"  # llm provider.
-  base_url: "https://ark.cn-beijing.volces.com/api/v3"  # you can change it to your own.
+  name: "ep-20250722234153-nsm5d"
+  provider: "openai"
+  base_url: "https://ark.cn-beijing.volces.com/api/v3"
 
 # 环境切换配置
 environment:
-  # 当前激活环境
-  active: "development"  # development | testing | staging | production
-  
-  # 环境特定配置
+  active: "development"
   profiles:
     development:
       futures_environment: testnet
       log_level: "DEBUG"
       enable_detailed_logging: true
-      
     testing:
       futures_environment: testnet
       log_level: "INFO"
       enable_detailed_logging: false
-      
     staging:
       futures_environment: testnet
       log_level: "WARNING" 
       enable_detailed_logging: false
-      
     production:
-      futures_environment: mainnet  # 生产环境可使用mainnet，但需谨慎
+      futures_environment: mainnet
       log_level: "ERROR"
       enable_detailed_logging: false
 
 # 期货交易配置
 futures:
-  # 环境配置 (默认使用testnet确保安全)
-  environment: testnet  # testnet | mainnet
-  
-  # API端点配置
+  environment: testnet
   api:
-    # 测试网API端点
     testnet:
       base_url: "https://testnet.binancefuture.com"
       api_url: "https://testnet.binancefuture.com/fapi/v1"
       websocket_url: "wss://stream.binancefuture.com/ws"
       websocket_stream_url: "wss://stream.binancefuture.com/stream"
-      
-    # 主网API端点  
     mainnet:
       base_url: "https://fapi.binance.com"
       api_url: "https://fapi.binance.com/fapi/v1"
       websocket_url: "wss://fstream.binance.com/ws"
       websocket_stream_url: "wss://fstream.binance.com/stream"
-      
-    # API配置
-    timeout: 10  # 请求超时时间(秒)
-    max_retries: 3  # 最大重试次数
-    retry_delay: 1.0  # 重试延迟(秒)
-  
-  # 保证金类型
-  margin_type: CROSSED  # CROSSED | ISOLATED
-  
-  # 交易对配置
+    timeout: 10
+    max_retries: 3
+    retry_delay: 1.0
+  margin_type: CROSSED
   symbols: ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
-  
-  # 默认杠杆配置 (每个交易对的默认杠杆)
   default_leverage:
     BTCUSDT: 10
     ETHUSDT: 10
     BNBUSDT: 5
-  
-  # 允许的订单类型
   allowed_order_types: ["MARKET", "LIMIT", "STOP", "TAKE_PROFIT"]
-  
-  # 最小订单大小配置
   min_order_size:
     BTCUSDT: 0.001
     ETHUSDT: 0.01
     BNBUSDT: 0.1
-  
-  # 价格精度配置
   price_precision:
     BTCUSDT: 2
     ETHUSDT: 2
     BNBUSDT: 4
-  
-  # 数量精度配置
   quantity_precision:
     BTCUSDT: 3
     ETHUSDT: 2
     BNBUSDT: 1
-  
-  # 风险控制配置
   risk:
-    # 最大杠杆倍数
     max_leverage: 20
-    
-    # 最大仓位大小 (USDT)
     max_position_size: 1000.0
-    
-    # 止损百分比 (2%)
     stop_loss_percentage: 0.02
-    
-    # 止盈百分比 (5%)
     take_profit_percentage: 0.05
-    
-    # 日损失限额 (USDT)
     daily_loss_limit: 500.0
-    
-    # 最大开仓数量
     max_open_positions: 5
-    
-    # 保证金要求比例 (10%)
     margin_requirement: 0.1
-  
-  # WebSocket配置
   websocket:
-    # 启用用户数据流
     enable_user_data_stream: true
-    
-    # 启用市场数据流
     enable_market_data_stream: true
-    
-    # 重连间隔 (秒)
     reconnect_interval: 5
-    
-    # 最大重连尝试次数
     max_reconnect_attempts: 10
-    
-    # 心跳间隔 (秒)
     heartbeat_interval: 30
-    
-    # 缓冲区大小
     buffer_size: 1024
-    
-    # 连接超时 (秒)
     connection_timeout: 10
-    
-    # ping间隔 (秒)
     ping_interval: 20
-    
-    # pong超时 (秒)  
     pong_timeout: 10
-  
-  # 安全配置
   security:
-    # API密钥配置 (从环境变量读取)
     api_key_env: "BINANCE_FUTURES_API_KEY"
     secret_key_env: "BINANCE_FUTURES_SECRET_KEY"
-    
-    # 是否启用签名验证
     enable_signature: true
-    
-    # 时间窗口 (毫秒)
     recv_window: 5000
-    
-    # 是否验证服务器证书
     verify_ssl: true
-    
-    # IP白名单验证 (可选)
     enable_ip_whitelist: false
-    
-  # 监控和日志配置  
   monitoring:
-    # 启用性能监控
     enable_performance_monitoring: true
-    
-    # 启用详细日志
     enable_detailed_logging: false
-    
-    # 日志级别
-    log_level: "INFO"  # DEBUG | INFO | WARNING | ERROR
-    
-    # 度量收集间隔 (秒)
+    log_level: "INFO"
     metrics_collection_interval: 60
-    
-    # 健康检查间隔 (秒)
     health_check_interval: 30
 
 # 官方 binance-connector-python SDK 配置
@@ -270,3 +191,125 @@ binance_sdk:
     rest_api_base_url: null  # 如果为null则使用SDK默认值
     websocket_api_url: null
     websocket_streams_url: null
+
+# 增强版市场分析器配置
+enhanced_market_analyzer:
+  # 基础配置
+  enable_real_time: true  # 启用实时数据流
+  enable_async: true  # 启用异步处理
+  cache_timeout: 300  # 缓存超时时间(秒)
+  data_quality_threshold: 0.8  # 数据质量阈值
+  
+  # WebSocket连接配置
+  websocket:
+    reconnect_delay: 5000  # 重连延迟(毫秒)
+    max_reconnect_attempts: 10  # 最大重连次数
+    connection_timeout: 10000  # 连接超时(毫秒)
+    heartbeat_interval: 30  # 心跳间隔(秒)
+  
+  # 数据流配置
+  streams:
+    # 支持的K线时间间隔
+    supported_intervals: ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"]
+    
+    # 默认启动的时间间隔
+    default_intervals: ["1m", "5m", "1h"]
+    
+    # 数据缓冲区大小
+    kline_buffer_size: 1000  # K线数据缓冲区大小
+    trade_buffer_size: 500   # 交易数据缓冲区大小
+    
+    # 深度数据配置
+    depth_levels: 20  # 深度数据档位数
+    depth_update_speed: "100ms"  # 深度数据更新频率
+  
+  # 技术分析配置
+  technical_analysis:
+    # 波动率计算周期
+    volatility_periods: [21, 63, 252]
+    
+    # 技术指标周期
+    technical_periods:
+      rsi: [14, 28]
+      ema: [9, 21, 50, 200]
+      bb: 20
+      atr: 14
+      adx: 14
+    
+    # 风险计算配置
+    var_confidence_levels: [0.95, 0.99]
+    risk_periods: [1, 5, 21]
+  
+  # 市场条件阈值
+  market_thresholds:
+    trend_strength_min: 0.6
+    volatility_regime_boundaries: [0.8, 1.2]
+    liquidity_thresholds: [0.2, 0.5, 1.5, 2.5]
+    sentiment_extremes: [0.2, 0.8]
+  
+  # 性能优化配置
+  performance:
+    # 并发处理
+    max_concurrent_requests: 10  # 最大并发请求数
+    request_rate_limit: 100      # 每秒请求限制
+    
+    # 内存管理
+    max_cache_entries: 10000     # 最大缓存条目数
+    cache_cleanup_interval: 600  # 缓存清理间隔(秒)
+    
+    # CPU优化
+    use_multiprocessing: false   # 是否使用多进程
+    worker_processes: 2          # 工作进程数
+  
+  # 数据质量控制
+  quality_control:
+    # 数据有效性检查
+    enable_data_validation: true
+    max_price_deviation: 0.1     # 最大价格偏差(10%)
+    max_volume_deviation: 2.0    # 最大成交量偏差(200%)
+    
+    # 异常数据处理
+    outlier_detection: true      # 启用异常值检测
+    outlier_threshold: 3.0       # 异常值阈值(标准差倍数)
+    
+    # 数据完整性检查
+    min_data_points: 20          # 分析所需最小数据点数
+    max_missing_ratio: 0.1       # 最大缺失数据比例
+  
+  # 监控和日志配置
+  monitoring:
+    enable_performance_monitoring: true  # 启用性能监控
+    enable_detailed_logging: false       # 启用详细日志
+    log_level: "INFO"                   # 日志级别
+    
+    # 指标收集
+    metrics_collection_interval: 60     # 指标收集间隔(秒)
+    health_check_interval: 30           # 健康检查间隔(秒)
+    
+    # 告警配置
+    enable_alerts: true                 # 启用告警
+    alert_thresholds:
+      connection_failure_count: 5       # 连接失败告警阈值
+      data_delay_seconds: 300          # 数据延迟告警阈值
+      error_rate_percent: 10           # 错误率告警阈值
+
+# 测试环境配置
+test_config:
+  # 测试交易对
+  test_symbols: ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
+  
+  # 测试时间间隔
+  test_intervals: ["1m", "5m", "1h"]
+  
+  # 测试持续时间
+  test_duration_seconds: 60
+  
+  # 模拟数据配置
+  mock_data:
+    enable_mock_mode: true              # 启用模拟模式
+    base_prices:
+      BTCUSDT: 50000.0
+      ETHUSDT: 3000.0
+      BNBUSDT: 300.0
+    price_volatility: 0.02              # 价格波动率(2%)
+    update_interval_seconds: 1          # 更新间隔

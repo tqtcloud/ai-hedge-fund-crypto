@@ -35,6 +35,10 @@ dependencies = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "pytest-mock>=3.10.0",
+    "cryptography>=45.0.7",
+    "watchdog>=6.0.0",
+    "binance-common>=1.0.0",
+    "binance-sdk-derivatives-trading-usds-futures>=1.0.0",
 ]
 
 #[tool.setuptools]

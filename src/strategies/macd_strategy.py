@@ -13,6 +13,25 @@ from indicators import (calculate_trend_signals,
                         weighted_signal_combination,
                         normalize_pandas)
 
+# 安全的统计计算函数
+def safe_std(arr, ddof=0):
+    """安全的标准差计算，处理NaN值"""
+    if len(arr) == 0:
+        return 0.0
+    clean_arr = np.array(arr)[~np.isnan(arr)]
+    if len(clean_arr) <= ddof:
+        return 0.0
+    return np.std(clean_arr, ddof=ddof)
+
+def safe_mean(arr):
+    """安全的均值计算，处理NaN值和空数组"""
+    if len(arr) == 0:
+        return 0.0
+    clean_arr = np.array(arr)[~np.isnan(arr)]
+    if len(clean_arr) == 0:
+        return 0.0
+    return np.mean(clean_arr)
+
 
 class MacdStrategy(BaseNode):
     def calculate_atr_values(self, df: pd.DataFrame) -> Dict[str, float]:
@@ -231,14 +250,14 @@ class MacdStrategy(BaseNode):
             for i in range(window, len(log_returns) + 1):
                 window_returns = log_returns[i-window:i]
                 # 计算标准差并年化（假设252个交易日）
-                vol = np.std(window_returns, ddof=1) * np.sqrt(252)
+                vol = safe_std(window_returns, ddof=1) * np.sqrt(252)
                 rolling_vol.append(vol)
             
             volatility_data[f'vol_{window}'] = np.array(rolling_vol)
         
         # 添加当前波动率
         if len(log_returns) >= 14:
-            current_vol = np.std(log_returns[-14:], ddof=1) * np.sqrt(252)
+            current_vol = safe_std(log_returns[-14:], ddof=1) * np.sqrt(252)
             volatility_data['current_vol'] = current_vol
         else:
             volatility_data['current_vol'] = 0.0
@@ -280,8 +299,8 @@ class MacdStrategy(BaseNode):
         
         # 方法1: 比较短期和中期波动率
         if len(vol_14) >= 5 and len(vol_30) >= 5:
-            recent_short = np.mean(vol_14[-5:])
-            recent_medium = np.mean(vol_30[-5:])
+            recent_short = safe_mean(vol_14[-5:])
+            recent_medium = safe_mean(vol_30[-5:])
             
             # 计算相对差异
             relative_diff = (recent_short - recent_medium) / recent_medium
@@ -304,7 +323,7 @@ class MacdStrategy(BaseNode):
             slope = np.polyfit(x, recent_vol, 1)[0]
             
             # 标准化斜率（相对于平均波动率）
-            avg_vol = np.mean(recent_vol)
+            avg_vol = safe_mean(recent_vol)
             normalized_slope = slope / avg_vol if avg_vol > 0 else 0
             
             if normalized_slope > 0.02:  # 斜率大于2%认为是增加趋势
@@ -348,13 +367,13 @@ class MacdStrategy(BaseNode):
         ewma_forecast = np.sqrt(ewma_vol)
         
         # 方法2: 历史平均回归
-        historical_mean = np.mean(vol_30)
+        historical_mean = safe_mean(vol_30)
         mean_reversion_speed = 0.1  # 均值回归速度
         mean_reversion_forecast = current_vol + mean_reversion_speed * (historical_mean - current_vol)
         
         # 方法3: 趋势延续
         if len(vol_30) >= 10:
-            recent_trend = np.mean(vol_30[-5:]) - np.mean(vol_30[-10:-5])
+            recent_trend = safe_mean(vol_30[-5:]) - safe_mean(vol_30[-10:-5])
             trend_forecast = current_vol + 0.5 * recent_trend  # 50%的趋势延续
         else:
             trend_forecast = current_vol
@@ -395,8 +414,8 @@ class MacdStrategy(BaseNode):
         if current_vol <= low_vol_threshold:
             # 低波动率状态概率
             # 使用正态分布近似计算概率
-            mean_low = np.mean(vol_30[vol_30 <= low_vol_threshold])
-            std_low = np.std(vol_30[vol_30 <= low_vol_threshold]) if len(vol_30[vol_30 <= low_vol_threshold]) > 1 else low_vol_threshold * 0.1
+            mean_low = safe_mean(vol_30[vol_30 <= low_vol_threshold])
+            std_low = safe_std(vol_30[vol_30 <= low_vol_threshold]) if len(vol_30[vol_30 <= low_vol_threshold]) > 1 else low_vol_threshold * 0.1
             
             # 计算在低波动率分布中的概率密度
             if std_low > 0:
@@ -407,8 +426,8 @@ class MacdStrategy(BaseNode):
                 
         elif current_vol >= high_vol_threshold:
             # 高波动率状态概率
-            mean_high = np.mean(vol_30[vol_30 >= high_vol_threshold])
-            std_high = np.std(vol_30[vol_30 >= high_vol_threshold]) if len(vol_30[vol_30 >= high_vol_threshold]) > 1 else high_vol_threshold * 0.1
+            mean_high = safe_mean(vol_30[vol_30 >= high_vol_threshold])
+            std_high = safe_std(vol_30[vol_30 >= high_vol_threshold]) if len(vol_30[vol_30 >= high_vol_threshold]) > 1 else high_vol_threshold * 0.1
             
             if std_high > 0:
                 z_score = abs(current_vol - mean_high) / std_high
@@ -495,7 +514,7 @@ class MacdStrategy(BaseNode):
             if all(lows[i] <= lows[i-j] for j in range(1, window+1)) and \
                all(lows[i] <= lows[i+j] for j in range(1, window+1)):
                 # 成交量确认（高成交量的低点更重要）
-                volume_factor = volumes[i] / np.mean(volumes[max(0, i-20):i+20])
+                volume_factor = volumes[i] / safe_mean(volumes[max(0, i-20):i+20])
                 local_lows.append((lows[i], volume_factor))
         
         if not local_lows:
@@ -565,7 +584,7 @@ class MacdStrategy(BaseNode):
             if all(highs[i] >= highs[i-j] for j in range(1, window+1)) and \
                all(highs[i] >= highs[i+j] for j in range(1, window+1)):
                 # 成交量确认
-                volume_factor = volumes[i] / np.mean(volumes[max(0, i-20):i+20])
+                volume_factor = volumes[i] / safe_mean(volumes[max(0, i-20):i+20])
                 local_highs.append((highs[i], volume_factor))
         
         if not local_highs:
@@ -823,7 +842,7 @@ class MacdStrategy(BaseNode):
             
             # 3. 计算信号一致性（所有策略信号方向的标准差）
             signal_values = [signal for signal, _ in signals]
-            signal_consistency = 1.0 - (np.std(signal_values) / 1.0) if len(signal_values) > 1 else 1.0
+            signal_consistency = 1.0 - (safe_std(signal_values) / 1.0) if len(signal_values) > 1 else 1.0
             
             # 4. 计算综合强度评分
             # 考虑信号方向强度、置信度、一致性
@@ -1102,11 +1121,11 @@ class MacdStrategy(BaseNode):
                 else:
                     signal_consistency.append(0.3)
             
-            consistency_score = np.mean(signal_consistency) if signal_consistency else 0.5
+            consistency_score = safe_mean(signal_consistency) if signal_consistency else 0.5
             
             # 3. 综合稳定性评分
             if stability_scores:
-                indicator_stability = np.mean(stability_scores)
+                indicator_stability = safe_mean(stability_scores)
             else:
                 indicator_stability = 0.5
             
@@ -1146,14 +1165,24 @@ class MacdStrategy(BaseNode):
                     historical_pattern = all_returns.iloc[i-window_size:i]
                     
                     # 计算皮尔逊相关系数
-                    correlation = np.corrcoef(recent_returns.values, historical_pattern.values)[0, 1]
+                    # 验证数据质量，避免numpy警告
+                    recent_vals = recent_returns.values
+                    hist_vals = historical_pattern.values
+                    
+                    # 检查数据有效性
+                    if (len(recent_vals) == len(hist_vals) and 
+                        not np.any(np.isnan(recent_vals)) and not np.any(np.isnan(hist_vals)) and
+                        np.std(recent_vals) > 1e-8 and np.std(hist_vals) > 1e-8):
+                        correlation = np.corrcoef(recent_vals, hist_vals)[0, 1]
+                    else:
+                        correlation = np.nan
                     
                     if not np.isnan(correlation) and abs(correlation) > 0.6:  # 高相关性
                         pattern_matches.append(abs(correlation))
             
             # 3. 评估模式匹配质量
             if pattern_matches:
-                avg_correlation = np.mean(pattern_matches)
+                avg_correlation = safe_mean(pattern_matches)
                 pattern_score = avg_correlation
             else:
                 pattern_score = 0.5  # 无明显模式匹配
@@ -1210,7 +1239,17 @@ class MacdStrategy(BaseNode):
                 volume_changes = volume_changes.tail(min_length)
                 
                 # 计算价量相关性
-                correlation = np.corrcoef(abs(price_changes), abs(volume_changes))[0, 1]
+                # 验证数据质量，避免numpy警告
+                abs_price = abs(price_changes).values
+                abs_volume = abs(volume_changes).values
+                
+                # 检查数据有效性
+                if (len(abs_price) == len(abs_volume) and
+                    not np.any(np.isnan(abs_price)) and not np.any(np.isnan(abs_volume)) and
+                    np.std(abs_price) > 1e-8 and np.std(abs_volume) > 1e-8):
+                    correlation = np.corrcoef(abs_price, abs_volume)[0, 1]
+                else:
+                    correlation = np.nan
                 correlation = 0.0 if np.isnan(correlation) else abs(correlation)
             else:
                 correlation = 0.0
@@ -1501,7 +1540,7 @@ class MacdStrategy(BaseNode):
             signal_strength_factor = non_neutral_signals / len(signal_array)
             
             # 4. 考虑置信度因子
-            avg_confidence = np.mean(confidence_values)
+            avg_confidence = safe_mean(confidence_values)
             confidence_factor = avg_confidence
             
             # 5. 综合计算一致性评分
@@ -1630,14 +1669,14 @@ class MacdStrategy(BaseNode):
                 return 0.0
             
             # 计算策略信号的标准差（一致性指标）
-            signal_std = np.std(signals)
+            signal_std = safe_std(signals)
             
             # 标准差越小，一致性越高，加成越大
             # 最大可能标准差约为1（全是+1和-1），标准化处理
             consistency_factor = max(0.0, 1.0 - signal_std / 1.0)
             
             # 考虑平均置信度
-            avg_confidence = np.mean(confidences) if confidences else 0.0
+            avg_confidence = safe_mean(confidences) if confidences else 0.0
             
             # 综合计算加成分数
             bonus = consistency_factor * avg_confidence * 0.3  # 最大加成0.3

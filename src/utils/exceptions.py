@@ -7,6 +7,27 @@
 from typing import Optional, Dict, Any
 
 
+class ValidationError(Exception):
+    """
+    配置验证异常
+    
+    当配置验证失败时抛出
+    """
+    
+    def __init__(self, message: str, field: Optional[str] = None, value: Optional[Any] = None):
+        """
+        初始化验证异常
+        
+        Args:
+            message: 错误消息
+            field: 出错的字段名
+            value: 出错的值
+        """
+        super().__init__(message)
+        self.field = field
+        self.value = value
+
+
 class ContractTradingError(Exception):
     """
     合约交易基础异常类

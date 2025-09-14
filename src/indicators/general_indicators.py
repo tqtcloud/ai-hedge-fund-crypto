@@ -366,7 +366,22 @@ def calculate_hurst_exponent(price_series: pd.Series, max_lag: int = 20) -> floa
     """
     lags = range(2, max_lag)
     # Add small epsilon to avoid log(0)
-    tau = [max(1e-8, np.sqrt(np.std(np.subtract(price_series[lag:], price_series[:-lag])))) for lag in lags]
+    tau = []
+    for lag in lags:
+        diff_series = np.subtract(price_series[lag:], price_series[:-lag])
+        # 检查差分序列有效性
+        if len(diff_series) > 0 and not np.all(np.isnan(diff_series)):
+            valid_diffs = diff_series[~np.isnan(diff_series)]
+            if len(valid_diffs) > 0:
+                std_val = np.std(valid_diffs)
+                tau.append(max(1e-8, np.sqrt(std_val)))
+            else:
+                tau.append(1e-8)
+        else:
+            tau.append(1e-8)
+    
+    if len(tau) < 2:
+        return 0.5
 
     # Return the Hurst exponent from linear fit
     try:
