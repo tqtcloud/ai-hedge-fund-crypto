@@ -41,5 +41,10 @@ dependencies = [
     "binance-sdk-derivatives-trading-usds-futures>=1.0.0",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest-asyncio>=1.2.0",
+]
+
 #[tool.setuptools]
 #packages = ["src"]

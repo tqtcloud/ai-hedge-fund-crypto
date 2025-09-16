@@ -512,6 +512,13 @@ class FuturesStrategyManager:
             weighted_scores[signal.direction] += confidence_weight
             total_weight += weight
 
+            # 详细日志记录每个信号的贡献
+            logger.debug(
+                f"  信号贡献: 策略={signal.strategy_source} 方向={signal.direction.value} "
+                f"置信度={signal.confidence:.1f}% 策略权重={weight:.2f} "
+                f"有效权重={confidence_weight:.3f}"
+            )
+
         if total_weight == 0:
             return None
 
@@ -519,13 +526,27 @@ class FuturesStrategyManager:
         winning_direction = max(weighted_scores, key=weighted_scores.get)
         winning_score = weighted_scores[winning_direction] / total_weight
 
+        # 输出各方向得分情况
+        logger.debug(
+            f"方向得分分布: LONG={weighted_scores[TradingDirection.LONG]/total_weight:.3f} "
+            f"SHORT={weighted_scores[TradingDirection.SHORT]/total_weight:.3f} "
+            f"NEUTRAL={weighted_scores[TradingDirection.NEUTRAL]/total_weight:.3f}"
+        )
+
         # 计算最终置信度
         final_confidence = min(100.0, winning_score * 100)
 
-        # 如果得分太低，设为中性
-        if final_confidence < 30:
+        # 如果得分太低，设为中性（降低阈值提高敏感度）
+        if final_confidence < 20:  # 从30降低到20，提高信号敏感度
             winning_direction = TradingDirection.NEUTRAL
             final_confidence = 50.0
+
+        # 添加详细调试日志
+        logger.debug(
+            f"置信度加权聚合结果: 胜出方向={winning_direction.value} "
+            f"胜出得分={winning_score:.3f} 最终置信度={final_confidence:.1f}% "
+            f"总权重={total_weight:.3f} 信号数={len(signals)}"
+        )
 
         # 选择最佳模板信号
         template_signal = max(signals, key=lambda s: s.confidence)

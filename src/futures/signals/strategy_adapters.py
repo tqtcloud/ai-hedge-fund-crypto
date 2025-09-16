@@ -97,7 +97,14 @@ class FuturesMacdStrategyAdapter(FuturesBaseStrategy):
             )
 
             if not futures_signal:
+                logger.warning(f"MACD策略转换信号失败: {ticker}")
                 return None
+
+            # 记录信号转换结果
+            logger.info(
+                f"MACD策略生成信号: {ticker} 方向={futures_signal.direction.value} "
+                f"置信度={futures_signal.confidence:.1f}% 强度={futures_signal.strength:.3f}"
+            )
 
             # 创建策略输出
             strategy_output = StrategyOutput(
@@ -181,7 +188,7 @@ class FuturesMacdStrategyAdapter(FuturesBaseStrategy):
             agent_data = {
                 "tickers": [ticker],
                 "intervals": [],
-                "metadata": {"show_reasoning": kwargs.get("show_reasoning", False)}
+                "analyst_signals": {}  # 添加analyst_signals字典
             }
 
             # 转换时间框架数据
@@ -195,11 +202,37 @@ class FuturesMacdStrategyAdapter(FuturesBaseStrategy):
 
                     agent_data["intervals"].append(MockInterval(timeframe))
 
-            return {"data": agent_data}
+            # 创建一个可以像AgentState一样工作的类
+            class MockAgentState(dict):
+                def __init__(self, agent_data, metadata):
+                    # 构建完整的状态结构
+                    state_data = {
+                        "data": agent_data,
+                        "metadata": metadata
+                    }
+                    super().__init__(state_data)
+
+                def __getitem__(self, key):
+                    return super().__getitem__(key)
+
+                def get(self, key, default=None):
+                    return super().get(key, default)
+
+            metadata = {"show_reasoning": kwargs.get("show_reasoning", False)}
+            return MockAgentState(agent_data, metadata)
 
         except Exception as e:
             logger.error(f"准备AgentState数据失败: {e}")
-            return {"data": {"tickers": [ticker], "intervals": []}}
+            class MockAgentState(dict):
+                def __init__(self, agent_data, metadata):
+                    state_data = {
+                        "data": agent_data,
+                        "metadata": metadata
+                    }
+                    super().__init__(state_data)
+
+            return MockAgentState({"tickers": [ticker], "intervals": [], "analyst_signals": {}},
+                                {"show_reasoning": False})
 
     def _convert_to_futures_signal(self,
                                  ticker: str,
@@ -392,7 +425,14 @@ class FuturesRSIStrategyAdapter(FuturesBaseStrategy):
             )
 
             if not futures_signal:
+                logger.warning(f"RSI策略转换信号失败: {ticker}")
                 return None
+
+            # 记录信号转换结果
+            logger.info(
+                f"RSI策略生成信号: {ticker} 方向={futures_signal.direction.value} "
+                f"置信度={futures_signal.confidence:.1f}% 强度={futures_signal.strength:.3f}"
+            )
 
             # 创建策略输出
             strategy_output_obj = StrategyOutput(
@@ -458,7 +498,8 @@ class FuturesRSIStrategyAdapter(FuturesBaseStrategy):
         try:
             agent_data = {
                 "tickers": [ticker],
-                "intervals": []
+                "intervals": [],
+                "analyst_signals": {}  # 添加analyst_signals字典
             }
 
             # 转换时间框架数据
@@ -472,11 +513,37 @@ class FuturesRSIStrategyAdapter(FuturesBaseStrategy):
 
                     agent_data["intervals"].append(MockInterval(timeframe))
 
-            return {"data": agent_data}
+            # 创建一个可以像AgentState一样工作的类
+            class MockAgentState(dict):
+                def __init__(self, agent_data, metadata):
+                    # 构建完整的状态结构
+                    state_data = {
+                        "data": agent_data,
+                        "metadata": metadata
+                    }
+                    super().__init__(state_data)
+
+                def __getitem__(self, key):
+                    return super().__getitem__(key)
+
+                def get(self, key, default=None):
+                    return super().get(key, default)
+
+            metadata = {"show_reasoning": kwargs.get("show_reasoning", False)}
+            return MockAgentState(agent_data, metadata)
 
         except Exception as e:
             logger.error(f"准备RSI AgentState数据失败: {e}")
-            return {"data": {"tickers": [ticker], "intervals": []}}
+            class MockAgentState(dict):
+                def __init__(self, agent_data, metadata):
+                    state_data = {
+                        "data": agent_data,
+                        "metadata": metadata
+                    }
+                    super().__init__(state_data)
+
+            return MockAgentState({"tickers": [ticker], "intervals": [], "analyst_signals": {}},
+                                {"show_reasoning": False})
 
     def _convert_to_futures_signal(self,
                                  ticker: str,

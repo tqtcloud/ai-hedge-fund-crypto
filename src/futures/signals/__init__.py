@@ -14,6 +14,7 @@ from .base_strategy import FuturesBaseStrategy
 from .strategy_factory import FuturesStrategyFactory
 from .strategy_manager import FuturesStrategyManager
 from .futures_signal_system import FuturesSignalSystem, SignalConfidenceMetrics, PositionOperation
+from .signal_format_adapter import FuturesSignalFormatAdapter, create_signal_adapter, adapt_signal
 
 __all__ = [
     'FuturesBaseStrategy',
@@ -21,5 +22,8 @@ __all__ = [
     'FuturesStrategyManager',
     'FuturesSignalSystem',
     'SignalConfidenceMetrics',
-    'PositionOperation'
+    'PositionOperation',
+    'FuturesSignalFormatAdapter',
+    'create_signal_adapter',
+    'adapt_signal'
 ]

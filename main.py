@@ -305,22 +305,43 @@ async def test_futures_signal_system(
     try:
         logger.info("🧪 开始期货信号系统功能测试...")
 
-        # 测试参数
-        test_ticker = "BTCUSDT"
-        test_timeframes = ['1m', '5m', '15m', '30m', '1h', '4h']  # 匹配期货系统期望的时间框架
+        # 测试参数 - 使用配置文件中的第一个ticker
+        from src.utils import settings
+        test_ticker = settings.signals.tickers[0] if settings.signals.tickers else "BTCUSDT"
+        test_timeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '1d']  # 匹配期货系统期望的时间框架
 
         # 获取市场数据
         if use_real_data:
             logger.info("🌐 使用真实市场数据进行测试")
             # 使用真实数据（不同时间框架）
             market_data = {}
+            failed_timeframes = []
+
             for timeframe in test_timeframes:
                 try:
-                    data = get_real_market_data(test_ticker, days=100)
+                    logger.info(f"正在获取 {test_ticker} {timeframe} 时间框架数据...")
+                    # 根据时间框架调整数据天数以避免超时
+                    days_map = {'1m': 3, '5m': 7, '15m': 15, '30m': 30, '1h': 50, '4h': 100, '1d': 250}
+                    days = days_map.get(timeframe, 50)
+                    data = get_real_market_data(test_ticker, days=days, timeframe=timeframe, use_cache=False)
+                    if data.empty:
+                        raise ValueError(f"{timeframe} 数据为空")
                     market_data[timeframe] = data
+                    logger.info(f"✅ 成功获取 {timeframe} 数据，共 {len(data)} 条记录")
                 except Exception as e:
-                    logger.warning(f"获取{timeframe}数据失败，使用模拟数据: {e}")
-                    market_data[timeframe] = generate_mock_price_data(days=100)
+                    logger.warning(f"❌ 获取{timeframe}数据失败: {e}")
+                    failed_timeframes.append(timeframe)
+
+            # 如果有任何时间框架数据获取失败，为所有时间框架生成模拟数据确保一致性
+            if failed_timeframes:
+                logger.warning(f"⚠️ 以下时间框架数据获取失败: {failed_timeframes}")
+                logger.info("🔄 为确保数据一致性，将为所有时间框架生成模拟数据")
+                market_data = {}
+                for timeframe in test_timeframes:
+                    market_data[timeframe] = generate_mock_price_data(days=100, start_price=50000.0)
+                    logger.info(f"📊 已生成 {timeframe} 模拟数据")
+            else:
+                logger.info("✅ 所有时间框架的真实数据获取成功")
         else:
             logger.info("📊 使用模拟数据进行测试")
             # 使用模拟数据
@@ -488,35 +509,37 @@ async def run_futures_signal_validation(
         return False
 
 
-def get_real_market_data(symbol: str = "BTCUSDT", days: int = 250) -> pd.DataFrame:
+def get_real_market_data(symbol: str = "BTCUSDT", days: int = 250, timeframe: str = "1h", use_cache: bool = False) -> pd.DataFrame:
     """
     从Binance获取真实市场数据
-    
+
     Args:
         symbol: 交易对符号
         days: 获取的天数
-        
+        timeframe: 时间框架 (1m, 5m, 15m, 30m, 1h, 4h, 1d等)
+        use_cache: 是否使用缓存数据
+
     Returns:
         包含OHLCV数据的DataFrame
     """
     try:
         # 创建数据提供者实例（公共API不需要密钥）
         provider = BinanceDataProvider()
-        
+
         # 计算开始和结束时间
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days)
-        
-        logger.info(f"正在从Binance获取 {symbol} 的真实数据...")
+
+        logger.info(f"正在从Binance获取 {symbol} 的真实数据 ({timeframe})...")
         logger.info(f"时间范围: {start_date.strftime('%Y-%m-%d')} 到 {end_date.strftime('%Y-%m-%d')}")
-        
-        # 获取历史数据（使用1小时时间框架）
+
+        # 获取历史数据（使用指定的时间框架）
         df = provider.get_historical_klines(
             symbol=symbol,
-            timeframe='1h',
+            timeframe=timeframe,
             start_date=start_date,
             end_date=end_date,
-            use_cache=True  # 使用缓存以提高性能
+            use_cache=use_cache  # 根据参数决定是否使用缓存
         )
         
         if df.empty:
@@ -572,37 +595,40 @@ async def test_market_analyzer(use_real_data: bool = True):
         logger.info("✅ 市场分析器初始化成功")
         
         # 获取市场数据 (使用250天确保有足够数据进行技术分析)
+        from src.utils import settings
+        test_symbol = settings.signals.tickers[0] if settings.signals.tickers else "BTCUSDT"
+
         if use_real_data:
-            test_data = get_real_market_data(symbol="BTCUSDT", days=250)
+            test_data = get_real_market_data(symbol=test_symbol, days=250, timeframe="1h")
         else:
             test_data = generate_mock_price_data(days=250, start_price=50000.0)
         logger.info("✅ 市场数据获取成功")
         
         # 测试核心功能
         logger.info("🔍 测试波动率计算...")
-        vol_metrics = await analyzer.calculate_volatility_metrics("BTCUSDT", test_data)
+        vol_metrics = await analyzer.calculate_volatility_metrics(test_symbol, test_data)
         logger.info(f"   历史波动率: {vol_metrics.historical_volatility:.3f}")
         logger.info(f"   波动率状态: {vol_metrics.volatility_regime.value}")
-        
+
         logger.info("🔍 测试技术指标计算...")
-        tech_indicators = await analyzer.calculate_technical_indicators("BTCUSDT", test_data)
+        tech_indicators = await analyzer.calculate_technical_indicators(test_symbol, test_data)
         trend_signal, confidence = tech_indicators.get_trend_signal()
         logger.info(f"   技术信号: {trend_signal.value}, 置信度: {confidence:.2f}")
         logger.info(f"   RSI(14): {tech_indicators.rsi_14:.1f}")
-        
+
         logger.info("🔍 测试市场条件分析...")
-        market_conditions = await analyzer.analyze_market_conditions("BTCUSDT", test_data)
+        market_conditions = await analyzer.analyze_market_conditions(test_symbol, test_data)
         logger.info(f"   主要状态: {market_conditions.primary_condition.value}")
         logger.info(f"   趋势强度: {market_conditions.trend_strength:.2f}")
-        
+
         logger.info("🔍 测试风险指标计算...")
-        risk_metrics = await analyzer.calculate_risk_metrics("BTCUSDT", test_data)
+        risk_metrics = await analyzer.calculate_risk_metrics(test_symbol, test_data)
         logger.info(f"   风险等级: {risk_metrics.risk_level.value}")
         logger.info(f"   最大回撤: {risk_metrics.max_drawdown:.3f}")
-        
+
         logger.info("🔍 测试综合分析...")
         comprehensive_analysis = await analyzer.analyze_market_comprehensive(
-            ticker="BTCUSDT",
+            ticker=test_symbol,
             price_data=test_data
         )
         logger.info(f"   分析置信度: {comprehensive_analysis['analysis_confidence']:.2f}")

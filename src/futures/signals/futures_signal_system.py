@@ -120,14 +120,14 @@ class FuturesSignalSystem:
         '4h': 0.25
     }
 
-    # 信号强度阈值
+    # 信号强度阈值（已优化：进一步降低阈值提高敏感度）
     SIGNAL_THRESHOLDS = {
-        'strong_long': 0.7,
-        'long': 0.5,
-        'neutral_upper': 0.2,
-        'neutral_lower': -0.2,
-        'short': -0.5,
-        'strong_short': -0.7
+        'strong_long': 0.6,
+        'long': 0.25,        # 从0.35进一步降低到0.25，更加敏感
+        'neutral_upper': 0.15,
+        'neutral_lower': -0.15,
+        'short': -0.25,      # 从-0.35进一步降低到-0.25，更加敏感
+        'strong_short': -0.6
     }
 
     def __init__(
@@ -136,7 +136,9 @@ class FuturesSignalSystem:
         leverage_controller: Optional[LeverageController] = None,
         market_analyzer: Optional[MarketAnalyzer] = None,
         tp_sl_calculator: Optional[TpSlCalculator] = None,
-        risk_params: Optional[Dict[str, Any]] = None
+        risk_params: Optional[Dict[str, Any]] = None,
+        enable_market_bridge: bool = True,
+        market_bridge_config: Optional[Dict[str, Any]] = None
     ):
         """
         初始化期货信号系统
@@ -147,6 +149,8 @@ class FuturesSignalSystem:
             market_analyzer: 市场分析器
             tp_sl_calculator: 止盈止损计算器
             risk_params: 风险参数配置
+            enable_market_bridge: 是否启用市场信号桥接
+            market_bridge_config: 市场信号桥接配置
         """
         self.strategy_manager = strategy_manager or FuturesStrategyManager()
         self.leverage_controller = leverage_controller or LeverageController()
@@ -157,6 +161,30 @@ class FuturesSignalSystem:
             'min_position_size': 10.0,
             'max_position_size': 10000.0
         }
+
+        # 市场信号桥接配置
+        self.enable_market_bridge = enable_market_bridge
+        self.market_signal_bridge = None
+        
+        if self.enable_market_bridge:
+            from .market_signal_bridge import MarketSignalBridge, MarketSignalWeight
+            
+            # 从配置创建桥接器
+            bridge_config = market_bridge_config or {}
+            weight_config = bridge_config.get('signal_weights', {})
+            
+            market_weight = MarketSignalWeight(
+                trend_weight=weight_config.get('trend_weight', 0.3),
+                risk_weight=weight_config.get('risk_weight', 0.4),
+                liquidity_weight=weight_config.get('liquidity_weight', 0.2),
+                sentiment_weight=weight_config.get('sentiment_weight', 0.1)
+            )
+            
+            risk_preference = bridge_config.get('risk_preference', 'moderate')
+            self.market_signal_bridge = MarketSignalBridge(
+                market_weight=market_weight,
+                risk_preference=risk_preference
+            )
 
         # 系统状态
         self.is_initialized = False
@@ -169,10 +197,12 @@ class FuturesSignalSystem:
             "successful_signals": 0,
             "signal_accuracy": {},
             "avg_processing_time": 0.0,
-            "direction_distribution": {}
+            "direction_distribution": {},
+            "bridge_statistics": {}  # 桥接统计信息
         }
 
-        logger.info("期货信号系统已初始化（包含专业止盈止损计算器）")
+        logger.info(f"期货信号系统已初始化（包含专业止盈止损计算器）"
+                   f"{'，已启用市场信号桥接' if self.enable_market_bridge else ''}")
 
     def initialize(self) -> bool:
         """
@@ -257,52 +287,118 @@ class FuturesSignalSystem:
                 timeframe_signals, market_data, current_price
             )
 
-            # 5. 确定操作类型
+            # === 新增：市场信号桥接层 ===
+            # 5. 市场分析和信号桥接
+            final_direction = direction
+            final_confidence = confidence_metrics.calculate_overall_confidence()
+            final_strength = abs(signal_strength)
+            bridge_metadata = {}
+
+            if self.enable_market_bridge and self.market_analyzer and self.market_signal_bridge:
+                try:
+                    # 获取市场条件分析
+                    market_analysis = await self.market_analyzer.analyze_market_conditions(
+                        ticker=ticker,
+                        price_data=market_data.get('1h', list(market_data.values())[0]),
+                        volume_data=None  # 可以从market_data中提取volume数据
+                    )
+
+                    # 桥接信号
+                    bridged_signal = self.market_signal_bridge.bridge_signals(
+                        market_analysis=market_analysis,
+                        strategy_direction=direction,
+                        strategy_strength=abs(signal_strength),
+                        strategy_confidence=confidence_metrics.calculate_overall_confidence() * 100
+                    )
+
+                    # 使用桥接后的信号
+                    final_direction = bridged_signal.final_direction
+                    final_confidence = bridged_signal.final_confidence
+                    final_strength = bridged_signal.final_strength
+
+                    # 记录桥接信息
+                    bridge_metadata = {
+                        "bridge_enabled": True,
+                        "market_analysis": market_analysis.to_dict(),
+                        "bridged_signal": bridged_signal.to_dict(),
+                        "original_direction": direction.value,
+                        "final_direction": final_direction.value,
+                        "signal_changed": direction != final_direction,
+                        "dominant_layer": bridged_signal.dominant_layer.value,
+                        "fusion_logic": bridged_signal.fusion_logic
+                    }
+
+                    logger.info(f"市场信号桥接完成: {ticker} "
+                              f"原始={direction.value} → 最终={final_direction.value} "
+                              f"置信度={final_confidence:.2f} 逻辑={bridged_signal.fusion_logic}")
+
+                except Exception as e:
+                    logger.error(f"市场信号桥接失败，使用原始信号: {e}")
+                    bridge_metadata = {"bridge_enabled": False, "bridge_error": str(e)}
+            else:
+                bridge_metadata = {"bridge_enabled": False, "reason": "桥接未启用或组件缺失"}
+
+            # 6. 确定操作类型（基于最终方向）
             operation = self._determine_operation(
-                direction, current_positions, ticker, confidence_metrics
+                final_direction, current_positions, ticker, confidence_metrics
             )
 
-            # 6. 计算杠杆建议
+            # 7. 计算杠杆建议（传递市场风险信息）
+            # 构建增强的市场数据，包含风险等级
+            enhanced_market_data = self._extract_market_data_for_leverage(market_data)
+
+            # 如果有市场分析结果，添加风险等级
+            if bridge_metadata.get('market_analysis'):
+                market_analysis_dict = bridge_metadata['market_analysis']
+                if 'risk_assessment' in market_analysis_dict:
+                    risk_info = market_analysis_dict['risk_assessment']
+                    # 将风险等级添加到市场数据中
+                    enhanced_market_data['risk_level'] = risk_info.get('risk_level', 'medium')
+                    enhanced_market_data['risk_score'] = risk_info.get('overall_risk_score', 50)
+                    enhanced_market_data['volatility'] = risk_info.get('volatility_risk', 0.2)
+
+                    logger.info(f"传递市场风险等级到杠杆控制器: {enhanced_market_data.get('risk_level', 'unknown')}")
+
             leverage_result = await self.leverage_controller.calculate_optimal_leverage(
                 ticker=ticker,
                 strategy=leverage_strategy,
                 current_positions=current_positions,
                 margin_status=margin_status,
-                market_data=self._extract_market_data_for_leverage(market_data)
+                market_data=enhanced_market_data
             )
 
-            # 7. 计算仓位大小
+            # 8. 计算仓位大小（基于最终方向）
             position_size = self._calculate_position_size(
-                ticker, direction, leverage_result, margin_status, current_price
+                ticker, final_direction, leverage_result, margin_status, current_price
             )
 
-            # 8. 使用专业止盈止损计算器
+            # 9. 使用专业止盈止损计算器（基于最终方向和强度）
             tp_sl_result = await self._calculate_advanced_tp_sl(
-                ticker, direction, current_price, leverage_result,
-                signal_strength, confidence_metrics, market_data
+                ticker, final_direction, current_price, leverage_result,
+                final_strength, confidence_metrics, market_data
             )
 
             # 提取止盈止损价格
             tp_price = tp_sl_result.take_profit_price if tp_sl_result else None
             sl_price = tp_sl_result.stop_loss_price if tp_sl_result else None
 
-            # 9. 预测收益和持仓时间
+            # 10. 预测收益和持仓时间（基于最终参数）
             expected_return, expected_duration = self._predict_return_and_duration(
-                direction, signal_strength, confidence_metrics, tp_price, sl_price, current_price
+                final_direction, final_strength, confidence_metrics, tp_price, sl_price, current_price
             )
 
-            # 10. 计算风险评分
+            # 11. 计算风险评分
             risk_score = self._calculate_risk_score(
                 leverage_result, confidence_metrics, margin_status
             )
 
-            # 11. 创建完整信号
+            # 12. 创建完整信号（使用最终参数）
             signal = FuturesSignal(
                 ticker=ticker,
-                direction=direction,
+                direction=final_direction,
                 operation_type=operation,
-                confidence=confidence_metrics.calculate_overall_confidence() * 100,
-                strength=abs(signal_strength),
+                confidence=final_confidence * 100,
+                strength=final_strength,
                 suggested_leverage=leverage_result.applied_leverage,
                 position_size=position_size,
                 entry_price=current_price,
@@ -311,13 +407,25 @@ class FuturesSignalSystem:
                 stop_loss_price=sl_price,
                 expiry_time=datetime.now() + timedelta(minutes=30),  # 信号30分钟有效
                 risk_level=self._determine_risk_level(risk_score),
-                strategy_source="futures_signal_system",
+                strategy_source="futures_signal_system_with_bridge",
                 signal_id=f"fs_{ticker}_{int(datetime.now().timestamp())}",
                 metadata={
-                    "signal_strength": signal_strength,
+                    # 原始信号信息
+                    "original_signal_strength": signal_strength,
+                    "original_direction": direction.value,
                     "timeframe_signals": len(timeframe_signals),
-                    "leverage_adjustment": leverage_result.get_adjustment_percentage(),
                     "confidence_breakdown": confidence_metrics.__dict__,
+                    
+                    # 桥接信息
+                    "bridge_metadata": bridge_metadata,
+                    
+                    # 最终结果
+                    "final_direction": final_direction.value,
+                    "final_confidence": final_confidence,
+                    "final_strength": final_strength,
+                    
+                    # 其他元数据
+                    "leverage_adjustment": leverage_result.get_adjustment_percentage(),
                     "expected_return": expected_return,
                     "expected_duration_hours": expected_duration,
                     "risk_score": risk_score,
@@ -326,22 +434,25 @@ class FuturesSignalSystem:
                 }
             )
 
-            # 12. 验证信号
+            # 13. 验证信号
             validation_result = self._validate_signal(signal, margin_status, current_positions)
             if not validation_result:
                 logger.warning(f"信号验证失败: {ticker}")
                 return None
 
-            # 13. 缓存信号
+            # 14. 缓存信号
             self._cache_signal(ticker, signal)
 
-            # 14. 更新统计
+            # 15. 更新统计（包括桥接统计）
             self._update_performance_stats(signal, datetime.now() - start_time)
+            if self.enable_market_bridge and self.market_signal_bridge:
+                self._performance_stats["bridge_statistics"] = self.market_signal_bridge.get_signal_statistics()
 
             logger.info(
-                f"信号生成完成: {ticker} 方向={direction.value} "
+                f"信号生成完成: {ticker} 方向={final_direction.value} "
                 f"操作={operation.value} 杠杆={leverage_result.applied_leverage:.1f} "
                 f"置信度={signal.confidence:.1f}% 强度={signal.strength:.3f}"
+                f"{' [桥接生效]' if bridge_metadata.get('signal_changed', False) else ''}"
             )
 
             return signal
@@ -376,14 +487,13 @@ class FuturesSignalSystem:
                     logger.warning(f"缺少时间框架数据: {timeframe}")
                     continue
 
-                # 为当前时间框架准备数据
-                tf_data = {timeframe: market_data[timeframe]}
-
-                # 使用策略管理器分析当前时间框架
+                # 传递完整的多时间框架数据给策略
+                # 策略需要所有支持的时间框架数据来进行验证和分析
                 aggregated_result = self.strategy_manager.analyze_ticker(
                     ticker=ticker,
-                    data=tf_data,
+                    data=market_data,  # 传递完整数据而不是单个时间框架
                     current_price=current_price,
+                    primary_timeframe=timeframe,  # 指定当前分析的主要时间框架
                     **kwargs
                 )
 
@@ -456,7 +566,22 @@ class FuturesSignalSystem:
             # 限制在 [-1, 1] 范围内
             signal_strength = max(-1.0, min(1.0, signal_strength))
 
-            logger.debug(f"综合信号强度计算完成: {signal_strength:.4f}")
+            # 详细的调试日志
+            logger.debug(
+                f"综合信号强度计算完成: {signal_strength:.4f} "
+                f"(来源: {len(timeframe_signals)}个时间框架, 总权重: {total_weight:.3f})"
+            )
+
+            # 输出每个时间框架的贡献
+            for tf_signal in timeframe_signals:
+                weight = self.TIMEFRAME_WEIGHTS.get(tf_signal.timeframe, 0.1)
+                confidence_weight = tf_signal.confidence / 100.0
+                logger.debug(
+                    f"  {tf_signal.timeframe}: 方向={tf_signal.direction.value} "
+                    f"强度={tf_signal.strength:.3f} 置信度={tf_signal.confidence:.1f}% "
+                    f"权重={weight*confidence_weight:.3f}"
+                )
+
             return signal_strength
 
         except Exception as e:
@@ -474,12 +599,23 @@ class FuturesSignalSystem:
             交易方向
         """
         try:
+            direction = TradingDirection.NEUTRAL
+
             if signal_strength >= self.SIGNAL_THRESHOLDS['long']:
-                return TradingDirection.LONG
+                direction = TradingDirection.LONG
             elif signal_strength <= self.SIGNAL_THRESHOLDS['short']:
-                return TradingDirection.SHORT
+                direction = TradingDirection.SHORT
             else:
-                return TradingDirection.NEUTRAL
+                direction = TradingDirection.NEUTRAL
+
+            # 添加详细调试日志
+            logger.debug(
+                f"信号方向判断: 强度={signal_strength:.4f} "
+                f"阈值[多头>={self.SIGNAL_THRESHOLDS['long']}, 空头<={self.SIGNAL_THRESHOLDS['short']}] "
+                f"→ 方向={direction.value}"
+            )
+
+            return direction
 
         except Exception as e:
             logger.error(f"确定交易方向失败: {e}")

@@ -28,6 +28,11 @@ from .leverage_models import (
     MarketRegime,
     LiquidityLevel
 )
+from .risk_constraints import (
+    RiskConstraintManager,
+    RiskLevel as ConstraintRiskLevel,
+    MarketRiskLevel
+)
 from ...utils.exceptions import (
     LeverageExceedsLimitError,
     MarginInsufficientError,
@@ -64,7 +69,8 @@ class LeverageController:
     def __init__(
         self,
         config: Optional[LeverageConfig] = None,
-        market_analyzer: Optional[MarketAnalyzer] = None
+        market_analyzer: Optional[MarketAnalyzer] = None,
+        enable_risk_constraints: bool = True
     ):
         """
         初始化杠杆控制器
@@ -72,9 +78,14 @@ class LeverageController:
         Args:
             config: 杠杆配置（可选，使用默认配置）
             market_analyzer: 市场分析器（可选）
+            enable_risk_constraints: 是否启用风险约束机制
         """
         self.config = config or LeverageConfig()
         self.market_analyzer = market_analyzer
+        self.enable_risk_constraints = enable_risk_constraints
+
+        # 初始化风险约束管理器
+        self.risk_constraint_manager = RiskConstraintManager() if enable_risk_constraints else None
 
         # 缓存数据
         self._market_conditions_cache: Dict[str, MarketCondition] = {}
@@ -87,10 +98,11 @@ class LeverageController:
             "total_adjustments": 0,
             "emergency_reductions": 0,
             "volatility_adjustments": 0,
-            "liquidity_adjustments": 0
+            "liquidity_adjustments": 0,
+            "risk_constraint_adjustments": 0  # 新增风险约束调整计数
         }
 
-        logger.info("杠杆控制器已初始化")
+        logger.info(f"杠杆控制器已初始化 - 风险约束: {'启用' if enable_risk_constraints else '禁用'}")
 
     async def calculate_optimal_leverage(
         self,
@@ -172,15 +184,103 @@ class LeverageController:
             final_leverage = min(calculated_leverage, effective_limit)
             final_leverage = max(final_leverage, limits.min_leverage)
 
+            # === 新增：应用风险约束机制 ===
+            if self.enable_risk_constraints and self.risk_constraint_manager:
+                # 获取市场风险等级
+                market_risk_level = await self._get_market_risk_level(ticker, market_condition)
+
+                # 将内部风险等级转换为约束风险等级
+                constraint_risk_level = self._convert_to_constraint_risk_level(risk_level, market_risk_level)
+
+                # 应用风险约束
+                constrained_leverage, constraint_used, constraint_msg = self.risk_constraint_manager.apply_risk_constraint(
+                    leverage=final_leverage,
+                    risk_level=constraint_risk_level,
+                    source=f"{ticker}_{strategy.value}"
+                )
+
+                if constrained_leverage != final_leverage:
+                    self._adjustment_stats["risk_constraint_adjustments"] += 1
+                    result.add_calculation_step(
+                        f"风险约束调整: {constraint_risk_level.value}风险等级下，"
+                        f"杠杆从{final_leverage:.1f}x调整至{constrained_leverage:.1f}x"
+                    )
+                    result.add_warning(constraint_msg)
+
+                    # 记录风险约束信息
+                    result.metadata = result.metadata or {}
+                    result.metadata['risk_constraint'] = {
+                        'applied': True,
+                        'original_leverage': final_leverage,
+                        'constrained_leverage': constrained_leverage,
+                        'risk_level': constraint_risk_level.value,
+                        'max_allowed': constraint_used.max_leverage,
+                        'recommended': constraint_used.recommended_leverage,
+                        'market_risk': market_risk_level
+                    }
+
+                    final_leverage = constrained_leverage
+                else:
+                    # 记录未调整但已检查
+                    result.metadata = result.metadata or {}
+                    result.metadata['risk_constraint'] = {
+                        'applied': False,
+                        'risk_level': constraint_risk_level.value,
+                        'leverage_within_limits': True,
+                        'max_allowed': constraint_used.max_leverage,
+                        'recommended': constraint_used.recommended_leverage
+                    }
+
             # 如果请求了特定杠杆，比较并决定
             if requested_leverage is not None:
-                if requested_leverage <= effective_limit:
-                    final_leverage = requested_leverage
-                    result.add_calculation_step(f"应用请求杠杆: {requested_leverage}")
+                # 如果启用了风险约束且已经应用了约束，不允许覆盖
+                if self.enable_risk_constraints and self.risk_constraint_manager:
+                    if result.metadata and 'risk_constraint' in result.metadata:
+                        constraint_info = result.metadata['risk_constraint']
+                        if constraint_info.get('applied'):
+                            # 风险约束已应用，请求的杠杆不能超过约束后的值
+                            if requested_leverage > final_leverage:
+                                result.add_warning(
+                                    f"请求杠杆{requested_leverage}x超过{constraint_info['risk_level']}风险约束限制{final_leverage}x，"
+                                    f"已强制应用风险约束"
+                                )
+                                # 保持风险约束后的杠杆
+                            else:
+                                # 请求的杠杆在风险约束范围内，可以应用
+                                final_leverage = requested_leverage
+                                result.add_calculation_step(f"应用请求杠杆: {requested_leverage} (在风险约束范围内)")
+                        else:
+                            # 风险约束未应用，但需要检查请求的杠杆是否超过风险限制
+                            max_allowed = constraint_info['max_allowed']
+                            if requested_leverage > max_allowed:
+                                # 请求的杠杆超过风险约束限制，需要应用约束
+                                final_leverage = min(requested_leverage, max_allowed)
+                                result.add_warning(
+                                    f"请求杠杆{requested_leverage}x超过{constraint_info['risk_level']}风险等级限制{max_allowed}x，"
+                                    f"已调整至{final_leverage}x"
+                                )
+                                result.add_calculation_step(f"风险约束限制: 请求杠杆{requested_leverage}x调整至{final_leverage}x")
+                                # 更新约束信息
+                                result.metadata['risk_constraint']['applied'] = True
+                                result.metadata['risk_constraint']['original_leverage'] = requested_leverage
+                                result.metadata['risk_constraint']['constrained_leverage'] = final_leverage
+                                self._adjustment_stats["risk_constraint_adjustments"] += 1
+                            elif requested_leverage <= effective_limit:
+                                final_leverage = requested_leverage
+                                result.add_calculation_step(f"应用请求杠杆: {requested_leverage}")
+                            else:
+                                result.add_warning(
+                                    f"请求杠杆{requested_leverage}超过限制{effective_limit}，已调整"
+                                )
                 else:
-                    result.add_warning(
-                        f"请求杠杆{requested_leverage}超过限制{effective_limit}，已调整"
-                    )
+                    # 未启用风险约束，正常处理
+                    if requested_leverage <= effective_limit:
+                        final_leverage = requested_leverage
+                        result.add_calculation_step(f"应用请求杠杆: {requested_leverage}")
+                    else:
+                        result.add_warning(
+                            f"请求杠杆{requested_leverage}超过限制{effective_limit}，已调整"
+                        )
 
             result.applied_leverage = final_leverage
             result.add_calculation_step(f"最终杠杆: {final_leverage}")
@@ -303,8 +403,9 @@ class LeverageController:
         Returns:
             市场条件对象
         """
-        # 检查缓存
-        cache_key = f"{ticker}_{datetime.now().strftime('%Y%m%d%H%M')}"
+        # 检查缓存 - 包含风险等级以区分不同的市场条件
+        risk_level_key = market_data.get('risk_level', 'unknown') if market_data else 'unknown'
+        cache_key = f"{ticker}_{risk_level_key}_{datetime.now().strftime('%Y%m%d%H%M')}"
         if cache_key in self._market_conditions_cache:
             cached = self._market_conditions_cache[cache_key]
             if cached.is_data_fresh(max_age_seconds=300):  # 5分钟有效
@@ -373,6 +474,7 @@ class LeverageController:
 
             # 如果提供了市场数据，使用它
             if market_data:
+                # 保存风险信息到metadata中
                 market_condition = MarketCondition(
                     ticker=ticker,
                     volatility=market_data.get('volatility', 0.2),
@@ -380,6 +482,13 @@ class LeverageController:
                     market_regime=MarketRegime(market_data.get('market_regime', 'calm')),
                     liquidity_level=LiquidityLevel(market_data.get('liquidity_level', 'medium'))
                 )
+
+                # 添加风险等级到metadata
+                if 'risk_level' in market_data:
+                    market_condition.metadata = market_condition.metadata or {}
+                    market_condition.metadata['risk_level'] = market_data['risk_level']
+                    market_condition.metadata['risk_score'] = market_data.get('risk_score', 50)
+                    logger.info(f"市场条件包含风险等级: {market_data['risk_level']}")
 
                 self._market_conditions_cache[cache_key] = market_condition
                 return market_condition
@@ -1015,6 +1124,121 @@ class LeverageController:
         # 更新缓存
         self._limits_cache[ticker] = limits
         logger.info(f"已添加{ticker}的杠杆限制")
+
+    async def _get_market_risk_level(self, ticker: str, market_condition: Optional[MarketCondition]) -> str:
+        """
+        获取市场风险等级
+
+        Args:
+            ticker: 交易对
+            market_condition: 市场条件
+
+        Returns:
+            市场风险等级字符串
+        """
+        try:
+            # 首先从市场条件的metadata中获取风险等级
+            if market_condition and hasattr(market_condition, 'metadata') and market_condition.metadata:
+                if 'risk_level' in market_condition.metadata:
+                    risk_level = market_condition.metadata['risk_level']
+                    logger.info(f"使用市场数据中的风险等级: {risk_level}")
+                    return risk_level
+
+            # 如果有市场分析器，直接获取风险等级
+            if self.market_analyzer:
+                try:
+                    market_analysis = await self.market_analyzer.analyze_market_conditions(ticker)
+                    if market_analysis and hasattr(market_analysis, 'risk_assessment'):
+                        risk_assessment = market_analysis.risk_assessment
+                        if hasattr(risk_assessment, 'risk_level'):
+                            return risk_assessment.risk_level
+                        # 如果没有risk_level属性，使用风险评分转换
+                        elif hasattr(risk_assessment, 'overall_risk_score'):
+                            score = risk_assessment.overall_risk_score
+                            if score >= 80:
+                                return "critical"
+                            elif score >= 60:
+                                return "high"
+                            elif score >= 40:
+                                return "medium"
+                            else:
+                                return "low"
+                except Exception as e:
+                    logger.warning(f"从市场分析器获取风险等级失败: {e}")
+
+            # 从市场条件推断风险等级
+            if market_condition:
+                volatility = market_condition.volatility
+                if volatility > 0.5:
+                    return "critical"
+                elif volatility > 0.3:
+                    return "high"
+                elif volatility > 0.15:
+                    return "medium"
+                else:
+                    return "low"
+
+            # 默认返回中等风险
+            return "medium"
+
+        except Exception as e:
+            logger.error(f"获取市场风险等级失败: {e}")
+            return "high"  # 出错时保守返回高风险
+
+    def _convert_to_constraint_risk_level(
+        self,
+        internal_risk: RiskLevel,
+        market_risk_str: str
+    ) -> ConstraintRiskLevel:
+        """
+        将内部风险等级和市场风险等级转换为约束风险等级
+
+        Args:
+            internal_risk: 内部风险等级
+            market_risk_str: 市场风险等级字符串
+
+        Returns:
+            约束风险等级
+        """
+        # 先转换内部风险等级
+        internal_mapping = {
+            RiskLevel.EMERGENCY: ConstraintRiskLevel.EMERGENCY,
+            RiskLevel.CRITICAL: ConstraintRiskLevel.CRITICAL,
+            RiskLevel.HIGH: ConstraintRiskLevel.HIGH,
+            RiskLevel.MEDIUM: ConstraintRiskLevel.MEDIUM,
+            RiskLevel.LOW: ConstraintRiskLevel.LOW
+        }
+        constraint_risk = internal_mapping.get(internal_risk, ConstraintRiskLevel.MEDIUM)
+
+        # 转换市场风险等级
+        market_risk_level = MarketRiskLevel.from_string(market_risk_str)
+        market_constraint_risk = self._map_market_to_constraint_risk(market_risk_level)
+
+        # 取两者中较高的风险等级
+        risk_priority = {
+            ConstraintRiskLevel.EMERGENCY: 5,
+            ConstraintRiskLevel.CRITICAL: 4,
+            ConstraintRiskLevel.HIGH: 3,
+            ConstraintRiskLevel.MEDIUM: 2,
+            ConstraintRiskLevel.LOW: 1
+        }
+
+        if risk_priority[market_constraint_risk] > risk_priority[constraint_risk]:
+            logger.info(f"使用市场风险等级: {market_constraint_risk.value} (高于内部风险: {constraint_risk.value})")
+            return market_constraint_risk
+        else:
+            return constraint_risk
+
+    def _map_market_to_constraint_risk(self, market_level: MarketRiskLevel) -> ConstraintRiskLevel:
+        """映射市场风险等级到约束风险等级"""
+        mapping = {
+            MarketRiskLevel.EMERGENCY: ConstraintRiskLevel.EMERGENCY,
+            MarketRiskLevel.CRITICAL: ConstraintRiskLevel.CRITICAL,
+            MarketRiskLevel.HIGH: ConstraintRiskLevel.HIGH,
+            MarketRiskLevel.MEDIUM: ConstraintRiskLevel.MEDIUM,
+            MarketRiskLevel.LOW: ConstraintRiskLevel.LOW
+        }
+        return mapping.get(market_level, ConstraintRiskLevel.MEDIUM)
 
 
 # 导出主要类

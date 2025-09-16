@@ -22,6 +22,7 @@ from src.graph.utils import show_agent_reasoning
 
 # 导入期货系统组件
 from src.futures.signals.futures_signal_system import FuturesSignalSystem
+from src.futures.signals.signal_format_adapter import FuturesSignalFormatAdapter
 from src.futures.models.data_models import TradingDirection, OperationType, RiskLevel
 from src.futures.leverage.leverage_controller import LeverageStrategy
 from src.futures.margin.margin_manager import MarginManager
@@ -55,7 +56,9 @@ class FuturesRiskManagementNode(BaseNode):
     def __init__(self):
         super().__init__()
         self.node_name = "futures_risk_management"
-        logger.info("期货风险管理节点初始化")
+        # 初始化信号格式适配器
+        self.signal_adapter = FuturesSignalFormatAdapter()
+        logger.info("期货风险管理节点初始化完成，包含信号格式适配器")
 
     def __call__(self, state: AgentState) -> Dict[str, Any]:
         """
@@ -656,37 +659,49 @@ class FuturesRiskManagementNode(BaseNode):
                 decision["reasons"].append("缺少期货交易信号")
                 return decision
 
-            # 解析期货信号
-            signal_direction = getattr(futures_signal, 'direction', None)
-            signal_confidence = getattr(futures_signal, 'confidence', 50.0)
-            suggested_leverage = getattr(futures_signal, 'suggested_leverage', 1.0)
-            position_size = getattr(futures_signal, 'position_size', 0.0)
+            # 使用信号格式适配器转换期货信号
+            try:
+                adapted_signal = self.signal_adapter.adapt_futures_signal_to_portfolio_action(
+                    futures_signal, ticker
+                )
 
-            if hasattr(signal_direction, 'value'):
-                direction_value = signal_direction.value
-            else:
-                direction_value = str(signal_direction)
+                # 验证转换后的信号
+                if self.signal_adapter.validate_converted_signal(adapted_signal):
+                    # 使用转换后的信号更新决策
+                    decision.update({
+                        "action": adapted_signal["action"],
+                        "confidence": adapted_signal["confidence"],
+                        "risk_adjusted_size": adapted_signal["risk_adjusted_size"],
+                        "max_leverage": adapted_signal["max_leverage"],
+                        "reasons": adapted_signal["reasons"]
+                    })
 
-            # 基于信号方向决定行动
-            if direction_value == 'long' and signal_confidence > 60:
-                decision["action"] = "OPEN_LONG"
-                decision["confidence"] = signal_confidence
-            elif direction_value == 'short' and signal_confidence > 60:
-                decision["action"] = "OPEN_SHORT"
-                decision["confidence"] = signal_confidence
-            elif direction_value == 'neutral':
-                decision["action"] = "CLOSE"
-                decision["confidence"] = signal_confidence
-                decision["reasons"].append("信号为中性，建议平仓")
+                    # 添加转换信息到元数据
+                    if "metadata" not in decision:
+                        decision["metadata"] = {}
+                    decision["metadata"]["signal_adapter"] = adapted_signal["metadata"]
+
+                    logger.info(f"✅ {ticker} 期货信号格式转换成功: {adapted_signal['action']}")
+                else:
+                    # 如果转换失败，使用默认逻辑
+                    logger.warning(f"⚠️ {ticker} 信号转换验证失败，使用原始解析逻辑")
+                    decision = self._legacy_signal_parsing(futures_signal, decision, ticker)
+
+            except Exception as e:
+                logger.error(f"❌ {ticker} 信号适配器转换失败: {e}")
+                # 回退到原始解析逻辑
+                decision = self._legacy_signal_parsing(futures_signal, decision, ticker)
 
             # 风险调整
             composite_risk = risk_factors.get("composite_score", 50.0)
 
             # 调整仓位大小
+            base_position_size = decision.get("risk_adjusted_size", 0.0)
             risk_adjustment_factor = max(0.1, min(1.0, (100 - composite_risk) / 100))
-            decision["risk_adjusted_size"] = position_size * risk_adjustment_factor
+            decision["risk_adjusted_size"] = base_position_size * risk_adjustment_factor
 
             # 调整杠杆
+            suggested_leverage = decision.get("max_leverage", 1.0)
             max_safe_leverage = min(suggested_leverage, 20.0)  # 硬性限制20x
             if overall_risk_level == RiskLevel.HIGH:
                 max_safe_leverage = min(max_safe_leverage, 5.0)
@@ -696,11 +711,14 @@ class FuturesRiskManagementNode(BaseNode):
             decision["max_leverage"] = max_safe_leverage
 
             # 添加具体原因
-            decision["reasons"].append(f"期货信号方向: {direction_value}, 置信度: {signal_confidence:.1f}%")
+            if "reasons" not in decision:
+                decision["reasons"] = []
             decision["reasons"].append(f"综合风险评分: {composite_risk:.1f}")
             decision["reasons"].append(f"风险调整系数: {risk_adjustment_factor:.2f}")
 
             # 添加警告
+            if "warnings" not in decision:
+                decision["warnings"] = []
             if composite_risk > 70:
                 decision["warnings"].append("高风险环境，建议谨慎操作")
             if suggested_leverage > max_safe_leverage:
@@ -718,6 +736,70 @@ class FuturesRiskManagementNode(BaseNode):
                 "reasons": [f"决策生成失败: {e}"],
                 "warnings": ["系统错误，建议人工检查"]
             }
+
+    def _legacy_signal_parsing(
+        self,
+        futures_signal: Any,
+        decision: Dict[str, Any],
+        ticker: str
+    ) -> Dict[str, Any]:
+        """
+        传统信号解析方法（作为适配器的回退机制）
+
+        Args:
+            futures_signal: 期货信号对象
+            decision: 基础决策字典
+            ticker: 交易对符号
+
+        Returns:
+            更新后的决策字典
+        """
+        try:
+            # 解析期货信号
+            signal_direction = getattr(futures_signal, 'direction', None)
+            signal_confidence = getattr(futures_signal, 'confidence', 50.0)
+            suggested_leverage = getattr(futures_signal, 'suggested_leverage', 1.0)
+            position_size = getattr(futures_signal, 'position_size', 0.0)
+
+            if hasattr(signal_direction, 'value'):
+                direction_value = signal_direction.value
+            else:
+                direction_value = str(signal_direction)
+
+            # 基于信号方向决定行动
+            if direction_value == 'long' and signal_confidence > 60:
+                decision["action"] = "OPEN_LONG"
+                decision["confidence"] = signal_confidence
+                decision["reasons"] = [f"期货信号方向: {direction_value}, 置信度: {signal_confidence:.1f}%"]
+            elif direction_value == 'short' and signal_confidence > 60:
+                decision["action"] = "OPEN_SHORT"
+                decision["confidence"] = signal_confidence
+                decision["reasons"] = [f"期货信号方向: {direction_value}, 置信度: {signal_confidence:.1f}%"]
+            elif direction_value == 'neutral':
+                decision["action"] = "CLOSE"
+                decision["confidence"] = signal_confidence
+                decision["reasons"] = ["信号为中性，建议平仓"]
+            else:
+                decision["action"] = "HOLD"
+                decision["confidence"] = signal_confidence
+                decision["reasons"] = [f"信号置信度不足({signal_confidence:.1f}%)，保持持仓"]
+
+            # 设置基础参数
+            decision["risk_adjusted_size"] = position_size or 0.0
+            decision["max_leverage"] = suggested_leverage or 1.0
+
+            logger.info(f"📊 {ticker} 使用传统信号解析: {decision['action']}")
+            return decision
+
+        except Exception as e:
+            logger.error(f"❌ {ticker} 传统信号解析失败: {e}")
+            decision.update({
+                "action": "HOLD",
+                "confidence": 0.0,
+                "reasons": [f"信号解析失败: {e}"],
+                "warnings": ["信号解析错误，默认保持持仓"]
+            })
+            return decision
 
     def _summarize_margin_status(self, margin_status: Optional[Any]) -> Dict[str, Any]:
         """汇总保证金状态"""
